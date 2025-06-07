@@ -56,6 +56,9 @@ class ConformanceChecking():
         
         return df
         
+        
+    # Recreate function:
+    
     def conformance_of_sampled_suffixes(self, case_concept_name: str):
         f = lambda v, k : list(sorted(list(filter(lambda k: k[0] == v, k)), key = lambda x : x[1]))
         
@@ -65,7 +68,7 @@ class ConformanceChecking():
         case_keys = f(case_concept_name, predicted_results.keys())
         
         list_predicted_sample_case_alignment = []
-        list_mean_sample_case_alignment = []
+        list_most_likely_sample_case_alignment = []
         list_target_case_alignment = []
         
         for case_key in case_keys:                        
@@ -101,7 +104,7 @@ class ConformanceChecking():
                                     "alignment": cf_mean_cases[0]['alignment'],
                                     "cost": cf_mean_cases[0]['cost'],
                                     "fitness": cf_mean_cases[0]['fitness']}
-            list_mean_sample_case_alignment.append(mean_case_alignment)
+            list_most_likely_sample_case_alignment.append(mean_case_alignment)
             
             # Target case
             df_target_case = self.__create_df([target_case])
@@ -112,7 +115,7 @@ class ConformanceChecking():
                                       "fitness": cf_target_cases[0]['fitness']}
             list_target_case_alignment.append(target_case_alignment)
         
-        return list_predicted_sample_case_alignment, list_mean_sample_case_alignment, list_target_case_alignment                
+        return list_predicted_sample_case_alignment, list_most_likely_sample_case_alignment, list_target_case_alignment                
         
     
     
