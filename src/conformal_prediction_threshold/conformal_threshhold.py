@@ -5,8 +5,10 @@ import math
 from collections import defaultdict
 from typing import List, Dict, Optional, Tuple, Any
 
+from conformance_checking.conformance import ConformanceChecking
+
 class ConformalPredictionThreshold:
-    def __init__(self, d_con_results: List[Dict[str, Any]], conformance_object: Any, log_name: Optional[str] = ""):
+    def __init__(self, d_con_results: List[Dict[str, Any]], conformance_object:ConformanceChecking , log_name: Optional[str] = ""):
         """
         d_con_results: List of dicts with evaluation results form the probabilistic suffix prediction model on the conformal dataset (validation).
         conformance_object: A ConformanceChecking object -> Implements the chosen (alignment-based) conformance check algorithm.
@@ -18,7 +20,7 @@ class ConformalPredictionThreshold:
          
     def simple_threshold_q(self, alpha):
         """
-        Original single‐threaded implementation.
+        Original single-threaded implementation.
         """
         target_fitness_scores = []
         most_likely_fitness_scores = []
@@ -58,175 +60,72 @@ class ConformalPredictionThreshold:
 
         return q_value_target, q_value_most_likely, q_value_samples
         
-    @staticmethod
-    def _compute_fitness(conformance_object, log_name: str, values: Any) -> Tuple[float, float, Tuple[float, float]]:
-        """
-        Module‐level helper for multiprocessing.
-        """
-        target_align, mostlikely_align, sample_aligns = (conformance_object.conformance_of_sampled_suffixes(log_name=log_name, result_values=values))
-        
-        target_fitness = target_align['fitness']
-        most_likely = mostlikely_align['fitness']
-        sampled_fitnessess = np.array([x['fitness'] for x in sample_aligns])
-        
-        return target_fitness, most_likely, (sampled_fitnessess.mean(), sampled_fitnessess.var(ddof=1))
-
-    def simple_threshold_q_parallel(self, alpha, max_workers: Optional[int] = None):
-        """
-        Parallel implementation using ProcessPoolExecutor.
-        """
-        # 1) Build the flat list of tasks
-        tasks = [
-            (self.conformance_object, self.log_name, values)
-            for result in self.d_con_results
-            for values in result.values()
-        ]
-
-        # 2) Dispatch in parallel
-        max_workers = max_workers or os.cpu_count()
-        target_scores = []
-        most_likely_scores = []
-        sampled_scores = []
-
-        with ProcessPoolExecutor(max_workers=max_workers) as exe:
-            futures = {
-                exe.submit(ConformalPredictionThreshold._compute_fitness, *task): task
-                for task in tasks
-            }
-            for fut in as_completed(futures):
-                tf, mf, (s_mean, s_var) = fut.result()
-                target_scores.append(tf)
-                most_likely_scores.append(mf)
-                sampled_scores.append(s_mean)
-
-        # 3) Sort each list ascending
-        target_scores.sort()
-        most_likely_scores.sort()
-        sampled_scores.sort()
-
-        # 4) Compute the Python index for the (n+1)*alpha quantile
-        n = len(target_scores)
-        q_index = math.ceil((n + 1) * alpha) - 1
-        q_index = min(max(q_index, 0), n - 1)
-
-        # 5) Extract the three Q‐values
-        q_target = target_scores[q_index]
-        q_most_likely = most_likely_scores[q_index]
-        q_sampled_mean = sampled_scores[q_index]
-
-        return q_target, q_most_likely, q_sampled_mean
-    
-    
     def threshold_q_per_prefix_length(self,alpha: float) -> List[Tuple[int, float, float, float]]:
         """
         For each prefix_length, compute the (target, most_likely, sampled_mean) Q-values.
         Returns a list of tuples: (prefix_length, q_target, q_most_likely, q_sampled_mean) sorted by prefix_length ascending.
         """
-        # 1) Group all fitness scores by prefix_length
-        groups: Dict[int, Dict[str, List[Any]]] = defaultdict(lambda: {
-            'target': [],
-            'most_likely': [],
-            'sampled_means': []
-        })
-
+        # Group all fitness scores by prefix_length
+        groups: Dict[int, Dict[str, List[Any]]] = defaultdict(lambda: {'target': [], 'most_likely': [], 'sampled_means': [], 'sampled_vars': []})
+        
+        # All pikckles that store results
         for result in self.d_con_results:
-            for (case_name, prefix_length), values in result.items():
-                t_con, m_con, sample_aligns = self.conformance_object.conformance_of_sampled_suffixes(
-                    log_name=self.log_name,
-                    result_values=values
-                )
-                # collect
+            # All cases in a pickle
+            for (_, prefix_length), values in result.items():
+                # Compute performance for case:
+                t_con, m_con, sample_cons = self.conformance_object.conformance_of_sampled_suffixes(log_name=self.log_name, result_values=values)
+                
                 groups[prefix_length]['target'].append(t_con['fitness'])
                 groups[prefix_length]['most_likely'].append(m_con['fitness'])
                 
-                arr = np.array([x['fitness'] for x in sample_aligns])
-                groups[prefix_length]['sampled_means'].append(arr.mean())
-
-        # 2) For each prefix, sort and pick the (n+1)*alpha quantile
-        output: List[Tuple[int, float, float, float]] = []
+                fitness_samples = np.array([x['fitness'] for x in sample_cons])
+                
+                # Mean of all samples fitness for one case.
+                mean_fitness_samples = fitness_samples.mean()
+                # Variance of all samples fitness for one case: The average within batch variance.
+                var_fitness_samples = fitness_samples.var(ddof=1)
+                
+                groups[prefix_length]['sampled_means'].append(mean_fitness_samples)
+                groups[prefix_length]['sampled_vars'].append(var_fitness_samples)
+                
+        mean_tgts_per_prefix_length = []
+        mean_ml_per_prefix_length = []
+        mean_samples_per_prefix_length = []
+        
+        qs_per_prefix_length = []
+        
         for prefix_length in sorted(groups):
             tgt_scores = sorted(groups[prefix_length]['target'])
             ml_scores  = sorted(groups[prefix_length]['most_likely'])
             sm_scores  = sorted(groups[prefix_length]['sampled_means'])
-
-            n = len(tgt_scores)
+            
+            n = len(sm_scores)
             # conformal quantile index (1-based → 0-based)
-            q_idx = math.ceil((n + 1) * alpha) - 1
-            q_idx = min(max(q_idx, 0), n - 1)
+            index_f_scores  = math.ceil((n + 1) * alpha) - 1
+            index_f_scores = min(max(index_f_scores, 0), n - 1)
 
-            q_tgt  = tgt_scores[q_idx]
-            q_ml   = ml_scores[q_idx]
-            q_sm   = sm_scores[q_idx]
+            q_tgt  = tgt_scores[index_f_scores]
+            q_ml   = ml_scores[index_f_scores]
+            q_sm   = sm_scores[index_f_scores]
+            # List of dicts: Keys: Prefix length, values: Tuple with target q, most likely q, samples q:
+            qs_per_prefix_length.append({prefix_length: (q_tgt, q_ml, q_sm)})
+            
+            # Mean of all targets over same prefix length
+            mean_tgt = np.mean(groups[prefix_length]['target'])
+            mean_ml_per_prefix_length.append({prefix_length: mean_tgt})
+            
+            # Mean of all most-likelies over same prefix length
+            mean_ml = np.mean(groups[prefix_length]['most_likely'])
+            mean_tgts_per_prefix_length.append({prefix_length: mean_ml})
+            
+            # Mean of means for all cases with same prefix length.
+            mean_means_sm = np.mean(groups[prefix_length]['sampled_means'])
+            # Mean of vars for all cases with same prefix length.
+            # Variance of batch means:
+            var_means_sm = np.var(groups[prefix_length]['sampled_means'])
+            # The Average within bacth variance:
+            mean_vars_sm = np.mean(groups[prefix_length]['sampled_vars'])
+            mean_samples_per_prefix_length.append({prefix_length: (mean_means_sm, (var_means_sm, mean_vars_sm))})
 
-            output.append((prefix_length, q_tgt, q_ml, q_sm))
-
-        return output
-    
-    
-    
-    
-    
-    @staticmethod
-    def _compute_fitness_for_prefix(prefix_length: int, conformance_object: Any, log_name: str,values: Any) -> Tuple[int, float, float, float]:
-        """
-        Worker helper: returns (prefix_length, target_fitness, most_likely_fitness, sampled_mean)
-        """
-        t_con, m_con, sample_aligns = conformance_object.conformance_of_sampled_suffixes(
-            log_name=log_name,
-            result_values=values
-        )
-        target_f = t_con['fitness']
-        most_likely_f = m_con['fitness']
-        arr = np.array([x['fitness'] for x in sample_aligns])
-        return prefix_length, target_f, most_likely_f, arr.mean()
-
-    def threshold_q_per_prefix_length_parallel(
-        self,
-        alpha: float,
-        max_workers: Optional[int] = None
-    ) -> List[Tuple[int, float, float, float]]:
-        """
-        Parallel version: for each prefix_length, compute
-          (q_target, q_most_likely, q_sampled_mean) at miscoverage alpha.
-        Returns a list of (prefix_length, q_target, q_most_likely, q_sampled_mean),
-        sorted by prefix_length.
-        """
-        # 1) Build tasks: one per (case_name, prefix_length, values)
-        tasks = []
-        for result in self.d_con_results:
-            for (case_name, prefix_length), values in result.items():
-                tasks.append((prefix_length, self.conformance_object, self.log_name, values))
-
-        # 2) Launch Pool
-        max_workers = max_workers or os.cpu_count()
-        grouped: Dict[int, Dict[str, List[float]]] = defaultdict(lambda: {
-            'target': [], 'most_likely': [], 'sampled_means': []
-        })
-
-        with ProcessPoolExecutor(max_workers=max_workers) as exe:
-            futures = {
-                exe.submit(
-                    ConformalPredictionThreshold._compute_fitness_for_prefix,
-                    *task
-                ): task for task in tasks
-            }
-            for fut in as_completed(futures):
-                prefix, t_f, m_f, s_mean = fut.result()
-                grouped[prefix]['target'].append(t_f)
-                grouped[prefix]['most_likely'].append(m_f)
-                grouped[prefix]['sampled_means'].append(s_mean)
-
-        # 3) For each prefix_length, sort & pick quantile
-        output: List[Tuple[int, float, float, float]] = []
-        for prefix in sorted(grouped):
-            tgt = sorted(grouped[prefix]['target'])
-            ml  = sorted(grouped[prefix]['most_likely'])
-            sm  = sorted(grouped[prefix]['sampled_means'])
-            n   = len(tgt)
-            idx = math.ceil((n + 1) * alpha) - 1
-            idx = min(max(idx, 0), n - 1)
-
-            output.append((prefix, tgt[idx], ml[idx], sm[idx]))
-
-        return output
+        return qs_per_prefix_length, mean_tgts_per_prefix_length, mean_ml_per_prefix_length, mean_samples_per_prefix_length 
         

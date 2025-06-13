@@ -5,13 +5,18 @@ from typing import Optional
 
 def load_results(path_d_con_results: str) -> None:
         """
-        Serially load all .pkl files from the given directory into self.d_con_results.
+        Load all .pkl files from the given directory into self.d_con_results.
         """
         
         i = 0
         
         results = []
-        for file_path in Path(path_d_con_results).glob("*.pkl"):
+        
+        print(f"Looking for .pkl files in: {path_d_con_results}")
+        file_paths = list(Path(path_d_con_results).glob("*.pkl"))
+        print(f"Found {len(file_paths)} files")
+
+        for file_path in file_paths:
             with file_path.open('rb') as f:
                 data = pickle.load(f)
                 results.append(data)
@@ -19,11 +24,14 @@ def load_results(path_d_con_results: str) -> None:
                 
                 i = i+1
                 
-                if i == 2:
+                if i == 3:
                     break
                 
         print("Loaded all conformal results!")
         return results  
+ 
+
+
         
 def _load_single_pickle(path_str: str):
     """
