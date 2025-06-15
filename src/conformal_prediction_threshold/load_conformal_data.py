@@ -8,7 +8,7 @@ def load_results(path_d_con_results: str) -> None:
         Load all .pkl files from the given directory into self.d_con_results.
         """
         
-        i = 0
+        # i = 0
         
         results = []
         
@@ -22,10 +22,10 @@ def load_results(path_d_con_results: str) -> None:
                 results.append(data)
                 print(f"Loaded conformal result of .pkl: {file_path.name}")
                 
-                i = i+1
+                # i = i+1
                 
-                if i == 3:
-                    break
+                # if i == 3:
+                #    break
                 
         print("Loaded all conformal results!")
         return results  
