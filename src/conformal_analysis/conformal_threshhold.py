@@ -5,7 +5,7 @@ from typing import List, Dict, Optional, Any
 
 from conformance_checking.conformance import ConformanceChecking
 
-class ConformalPredictionThreshold:
+class ConformalAnalysisThreshold:
     def __init__(self, d_con_results: List[Dict[str, Any]], conformance_object:ConformanceChecking , log_name: Optional[str] = ""):
         """
         d_con_results: List of dicts with evaluation results form the probabilistic suffix prediction model on the conformal dataset (validation).
