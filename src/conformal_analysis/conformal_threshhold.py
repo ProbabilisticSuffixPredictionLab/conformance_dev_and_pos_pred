@@ -63,8 +63,7 @@ class ConformalAnalysisThreshold:
                                                            'most_likely_fitness_score': [],
                                                            'sampled_case_fitness_scores': [],
                                                            'sampled_case_mean_std_fitness': []
-                                                           }
-                                                  )
+                                                           })
         
         # Iterate thorugh all processed result pickles
         for result in self.d_con_results:
