@@ -1,5 +1,6 @@
 import numpy as np
 import pm4py
+from typing import Optional
 
 from collections import defaultdict, OrderedDict, Counter
 
@@ -8,8 +9,10 @@ class Deviation:
         pass
     
     @staticmethod
-    def __individual_deviations_helper(conformance: dict):
-
+    def __deviations(conformance: dict):
+        """
+        
+        """
         deviations = defaultdict(lambda: {'model_moves': [],
                                           'log_moves': []})
         
@@ -31,21 +34,27 @@ class Deviation:
         return sorted_deviations
     
     def individual_deviations_target(self, target_conformance):
-        deviations = self.__individual_deviations_helper(conformance=target_conformance)
+        """
+        
+        """
+        deviations = self.__deviations(conformance=target_conformance)
 
         return deviations
     
     def individual_deviations_most_likely(self, most_likely_conformance):
-        deviations = self.__individual_deviations_helper(conformance=most_likely_conformance)
+        """
+        
+        """
+        deviations = self.__deviations(conformance=most_likely_conformance)
 
         return deviations
     
     @staticmethod
-    def __majority_moves(move_lists, beta):
+    def __samples_deviations(move_lists, beta, prob: Optional[bool]=False):
         """
         move_lists: List[List[tuple]]  — one list of moves per sample
-        beta: float in (0,1)          — fraction threshold
-        returns: List[tuple]          — moves appearing in ≥ beta fraction of samples
+        beta: float in (0,1)           — fraction threshold
+        returns: List[tuple]           — moves appearing in ≥ beta fraction of samples
         """
         
         N = len(move_lists)
@@ -59,10 +68,20 @@ class Deviation:
 
         # Keep only those moves whose count ≥ beta * N
         thresh = beta * N
-        return [ move for move, c in cnt.items() if c >= thresh ]
-    
-    def individual_deviations_samples(self, samples_conformance, beta_threshold):
         
+        if prob:
+            # Return deviation dict with deviation and probability across all MC smaples.
+            deviations = {move: c/N for move, c in cnt.items() if c >= thresh}
+        else:
+            # Return deviation list.
+            deviations = [move for move, c in cnt.items() if c >= thresh]
+        
+        return deviations
+    
+    def individual_deviations_samples(self, samples_conformance, beta_threshold, probabilistic: Optional[bool]=False):
+        """
+        
+        """
         deviations = defaultdict(lambda: {'model_moves': [],
                                           'log_moves': []})
         
@@ -85,11 +104,9 @@ class Deviation:
                     
                     sample_log_moves = [ (a, b) for (a, b) in alignment if a!= None and b != None and a == '>>' and b != '>>']
                     model_moves.append(sample_log_moves)
-                    
-                
-                # now get the “ensemble” deviations at 50% threshold
-                top_model_moves = self.__majority_moves(model_moves, beta=beta_threshold)
-                top_log_moves   = self.__majority_moves(log_moves, beta=beta_threshold)
+               
+                top_model_moves = self.__samples_deviations(move_lists=model_moves,beta=beta_threshold, prob=probabilistic)
+                top_log_moves = self.__samples_deviations(move_lists=log_moves, beta=beta_threshold, prob=probabilistic)
                 
                 deviations[pref_len]['model_moves'].append(top_model_moves)
                 deviations[pref_len]['log_moves'].append(top_log_moves)
@@ -97,6 +114,5 @@ class Deviation:
         sorted_deviations = OrderedDict(sorted(deviations.items(), key=lambda item: item[0]))
         
         return sorted_deviations
-
-    def deviation_patterns(self):
-        pass
+    
+    
