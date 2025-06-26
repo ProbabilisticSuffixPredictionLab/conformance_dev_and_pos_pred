@@ -31,12 +31,12 @@ class ConformalRiskUncertaintyPrediction:
         
         # All cases:
         all_group = defaultdict(lambda: {'test_case_id': [],
-                                     'target_conformance': [],
-                                     'most_likely_conformance': [],
-                                     'samples_conformance': [],
-                                     'mean_samples_fitness': [],
-                                     'sd_samples_fitness': []
-                                     })
+                                         'target_conformance': [],
+                                         'most_likely_conformance': [],
+                                         'samples_conformance': [],
+                                         'mean_samples_fitness': [],
+                                         'sd_samples_fitness': []
+                                         })
         # Risk-flagged cases: 
         risk_group = defaultdict(lambda: {'test_case_id': [],
                                           'target_conformance': [],
@@ -89,8 +89,9 @@ class ConformalRiskUncertaintyPrediction:
                 else:
                     # Use last available thresholds if prefix_length not in dict
                     last_mean = list(mean_conformal_fitness_prefix_lengths.values())[-1]
-                    last_r = list(r_conformal_fitness_prefix_lengths.values())[-1]
                     mean_cf = last_mean
+                    
+                    last_r = list(r_conformal_fitness_prefix_lengths.values())[-1]
                     r_cf = last_r
                 
                 # Risk Threshold: Risk-flagged cases:
@@ -123,7 +124,7 @@ class ConformalRiskUncertaintyPrediction:
                     discarded_risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
                 
         # Sort groups by prefix length ascending
-        sorted_all_group = risk_group = OrderedDict(sorted(all_group.items(), key=lambda item: item[0]))
+        sorted_all_group = OrderedDict(sorted(all_group.items(), key=lambda item: item[0]))
         sorted_risk_group = OrderedDict(sorted(risk_group.items(), key=lambda item: item[0]))
         sorted_high_risk_group = OrderedDict(sorted(high_risk_group.items(), key=lambda item: item[0]))
         sorted_discarded_risk_group = OrderedDict(sorted(discarded_risk_group.items(), key=lambda item: item[0]))

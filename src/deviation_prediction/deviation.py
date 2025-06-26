@@ -56,7 +56,6 @@ class Deviation:
         beta: float in (0,1)           — fraction threshold
         returns: List[tuple]           — moves appearing in ≥ beta fraction of samples
         """
-        
         N = len(move_lists)
         # Count in how many samples each move appears
         cnt = Counter()
