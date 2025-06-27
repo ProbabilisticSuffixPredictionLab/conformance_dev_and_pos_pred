@@ -47,8 +47,8 @@ class ConformalAnalysisThreshold:
         # Step 3: Calculate quantile index (rounding up)
         n = len(target_fitness_scores_sorted)
 
-        # For python indexing: Choose the vlaue (n + 1) * alpha) starting at index 1.
-        q_index = math.ceil((n + 1) * alpha) - 1
+        # For python indexing: Choose the vlaue (n + 1) * α) starting at index 1.
+        q_index = math.floor((n + 1) * alpha) - 1
         q_index = min(max(q_index, 0), n - 1)
         print("Q index: ", q_index)
 
@@ -58,7 +58,8 @@ class ConformalAnalysisThreshold:
 
         return q_value_target, q_value_most_likely, q_value_samples
         
-    def threshold_q_per_prefix_length(self, alpha: float):
+    def threshold_q_per_prefix_length(self, alpha_risk, alpha_high_risk: float):
+        
         fitness_score_result_groups = defaultdict(lambda: {'target_fitness_score': [],
                                                            'most_likely_fitness_score': [],
                                                            'sampled_case_fitness_scores': [],
@@ -90,8 +91,17 @@ class ConformalAnalysisThreshold:
 
         case_name_fitness_scores_per_prefix_length = {}
         mean_tgts_ml_samples_per_prefix_length = {}
+        
+        # Standard Deviations: 
+        # (1): Mean of std within the sample fitness scores (Predictive Uncertainty), 
+        # (2): Standard Deviation of the mean fitness scores of the samples (Global Conformal Uncertainty)
         std_samples_per_prefix_length = {}
+        
+        # Risk Threshold values:
         q_samples_per_prefix_length = {}
+        
+        # High-Risk Threshold value:
+        r_samples_per_prefix_length = {}
 
         # Iterate through the conformance results by ascending prefix lengths:
         for prefix_length in sorted(fitness_score_result_groups):
@@ -101,8 +111,8 @@ class ConformalAnalysisThreshold:
             # Iterate through case names and fitness scores
             for d in fitness_score_result_groups[prefix_length]['sampled_case_fitness_scores']:
                 for case_name, fitness_scores in d.items():
-                    # Find the corresponding mean/std entry
-                    mean_std_tuple = next((m_sd[case_name] for m_sd in fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'] if case_name in m_sd), (0, 0))
+                    # Find the corresponding mean and std entry
+                    mean_std_tuple = next((m_std[case_name] for m_std in fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'] if case_name in m_std), (0, 0))
                     case_results[case_name] = (fitness_scores, mean_std_tuple[0], mean_std_tuple[1])
             # Add dict entry with prefix length: {case name: fitness_scores, mean, std} 
             case_name_fitness_scores_per_prefix_length[prefix_length] = case_results
@@ -112,10 +122,11 @@ class ConformalAnalysisThreshold:
             mean_tgt = np.mean(fitness_score_result_groups[prefix_length]['target_fitness_score'])
             # Mean of all most likely fitness scores with same prefix length:
             mean_ml = np.mean(fitness_score_result_groups[prefix_length]['most_likely_fitness_score'])
-            # Iterate through the values to get for each case with same prefix length mean and standard deviation for all samples fitness scores:
+            
+            # Mean of all mean samples fitness scores
             all_mean_stds = [v for d in fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'] for v in d.values()]
-            means = [m for m, _ in all_mean_stds]
-            mean_means_sm = np.mean(means)
+            mean_samples = [m for m, _ in all_mean_stds]
+            mean_means_sm = np.mean(mean_samples)
             mean_tgts_ml_samples_per_prefix_length[prefix_length] = (mean_tgt, mean_ml, mean_means_sm) 
             
             # Standard Deviations:
@@ -123,24 +134,28 @@ class ConformalAnalysisThreshold:
             # Mean of standard deviations within all samples fitness scores
             within_mean_stds_sm = np.mean(stds)
             # Standard deviation between all mean samlpled fitness scores
-            # All n-fitness values are a sample from some much larger (unknown) joint distribution: Used 1/N-1
-            between_std_means_sm = np.std(means, ddof=1)
+            between_std_means_sm = np.std(mean_samples, ddof=1)
             std_samples_per_prefix_length[prefix_length] = (within_mean_stds_sm, between_std_means_sm)
 
-            # Q0.9
-            sorted_means = sorted(means)
+            # Get α (miscoverage: risk and high risk set) thresholds:
+            sorted_means = sorted(mean_samples)
             n = len(sorted_means)
-            # index_f_scores = math.ceil((n + 1) * alpha) - 1
-            # Rounding up to get lower bound to ensure 1-alpha coverage:
-            index_f_scores = math.floor((n + 1) * alpha) - 1
-            index_f_scores = min(max(index_f_scores, 0), n - 1)
-            # lower 1-alpha quantile value for upper quantile of all mean sampled fitness scores
-            q_sm = sorted_means[index_f_scores]   
             
+            # Risk:
+            index_f_scores = math.floor((n + 1) * alpha_risk) - 1
+            index_f_scores = min(max(index_f_scores, 0), n - 1)
+            q_sm = sorted_means[index_f_scores]   
             q_samples_per_prefix_length[prefix_length] = q_sm
+
+            # High Risk:
+            index_f_scores = math.floor((n + 1) * alpha_high_risk) - 1
+            index_f_scores = min(max(index_f_scores, 0), n - 1)
+            r_sm = sorted_means[index_f_scores]   
+            r_samples_per_prefix_length[prefix_length] = r_sm
 
         return (case_name_fitness_scores_per_prefix_length,
                 mean_tgts_ml_samples_per_prefix_length,
                 std_samples_per_prefix_length,
-                q_samples_per_prefix_length)
+                q_samples_per_prefix_length,
+                r_samples_per_prefix_length)
         
