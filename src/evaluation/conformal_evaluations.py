@@ -1,5 +1,6 @@
 from typing import Dict
 import numpy as np
+import math
 
 class ConformalEvaluation:
     def __init__(self):
@@ -34,6 +35,8 @@ class ConformalEvaluation:
         miscoverage_pref_len = {}
         coverage_pref_len = {}
         
+        coverage_perfect_fitness = {}
+        
         # Miscoverage per pref len:
         for pref_len, thresh in threshold_values.items():
             # Miscoverage per pref. len
@@ -44,6 +47,9 @@ class ConformalEvaluation:
             # Coverage per pref. len
             coverage_pref_len[pref_len] = 1 - miscoverage_pref_len[pref_len]
             
+            cov_per_fit = len([fit for fit in targets_conformance[pref_len] if math.isclose(fit, 1.0, rel_tol=1e-9)])
+            coverage_perfect_fitness[pref_len] = cov_per_fit / len(targets_conformance[pref_len])
+            
         # Total Miscoverage
         total_miscoverage = total_miscoverage / sum([len(value) for value in targets_conformance.values()])
         # Total Coverage
@@ -52,7 +58,8 @@ class ConformalEvaluation:
         return  (total_miscoverage,
                  total_coverage,
                  miscoverage_pref_len,
-                 coverage_pref_len)
+                 coverage_pref_len,
+                 coverage_perfect_fitness)
         
     def size(self, cov_set: Dict, miscov_set: Dict):
         avg_size_cov_set = np.mean([len(cons) for _, cons in cov_set.items()])

@@ -2,9 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import OrderedDict
 from sklearn.metrics import roc_curve, auc, roc_auc_score
+from typing import Dict
 
 class EvaluationMetrics:
-    def __init__(self, target_alignments, predicted_alignments):
+    def __init__(self, target_alignments: Dict, predicted_alignments: Dict):
         self.target_alignments = target_alignments
         self.pred_alignments = predicted_alignments
 
@@ -152,64 +153,79 @@ class EvaluationMetrics:
 
         return fpr_dict, tpr_dict, thresh_dict, roc_auc, Y_true, Y_score
 
-    def probabilistic_roc_deviation_multilabel(self, deviations_samples_risk, average='macro'):
+    def probabilistic_roc_deviation_multilabel(self, average='macro'):
         all_classes = set()
-        # Deviation samples: key: deviation, values probability
-        for probs in deviations_samples_risk.values():
+        
+        # Step 1: Collect all predicted deviations (to build initial class set)
+        for probs in self.pred_alignments.values():
             for d in probs['model_moves'] + probs['log_moves']:
                 all_classes.update(d.keys())
-        all_classes = sorted(all_classes)
-        cls_to_idx = {c:i for i,c in enumerate(all_classes)}
 
-        Y_true_rows  = []
+        # Step 2: Ensure all target deviations are present in predictions
+        for p in self.target_alignments:
+            # Target and predicted model/log moves
+            m_t = self.target_alignments[p]['model_moves']
+            l_t = self.target_alignments[p]['log_moves']
+            m_p = self.pred_alignments[p]['model_moves']
+            l_p = self.pred_alignments[p]['log_moves']
+
+            for tgt_seq, pred_seq in zip(m_t + l_t, m_p + l_p):
+                for move in tgt_seq:
+                    if move not in pred_seq:
+                        pred_seq[move] = 0.0  # Ensure 0% prob for missing moves
+                all_classes.update(tgt_seq)
+                all_classes.update(pred_seq)
+
+        # Finalize class mapping
+        all_classes = sorted(all_classes)
+        cls_to_idx = {c: i for i, c in enumerate(all_classes)}
+
+        # Step 3: Build true and predicted label matrices
+        Y_true_rows = []
         Y_score_rows = []
 
-        for pref_len, probs in deviations_samples_risk.items():
-            # Predicted deviations
+        for pref_len, probs in self.pred_alignments.items():
+            # Predicted probabilities
             model_probs = probs['model_moves']
             log_probs   = probs['log_moves']
 
-            # Target deviations for prefix length
+            # Corresponding ground truth
             tgt_mod = self.target_alignments[pref_len]['model_moves']
             tgt_log = self.target_alignments[pref_len]['log_moves']
 
             for i, (m_prob, l_prob) in enumerate(zip(model_probs, log_probs)):
                 true_moves = set(tgt_mod[i]) | set(tgt_log[i])
 
-                # b) build rows
+                # Binary true labels
                 true_row  = np.zeros(len(all_classes), dtype=int)
-                score_row = np.zeros(len(all_classes), dtype=float)
-
-                # fill true
                 for c in true_moves:
                     true_row[cls_to_idx[c]] = 1
 
-                # fill score from your risk‐probabilities
-                # note: if a class never appeared in the dict, its prob remains 0
+                # Predicted probabilities
+                score_row = np.zeros(len(all_classes), dtype=float)
                 for c, p in m_prob.items():
                     score_row[cls_to_idx[c]] = p
                 for c, p in l_prob.items():
-                    # take the max if both model/log provide a prob
                     idx = cls_to_idx[c]
-                    score_row[idx] = max(score_row[idx], p)
+                    score_row[idx] = max(score_row[idx], p)  # resolve duplicate probs
 
-                Y_true_rows .append(true_row)
+                Y_true_rows.append(true_row)
                 Y_score_rows.append(score_row)
 
         Y_true  = np.vstack(Y_true_rows)
         Y_score = np.vstack(Y_score_rows)
 
-        # Per‐class ROC curves
+        # Step 4: Compute per-class ROC curves
         fpr_dict    = {}
         tpr_dict    = {}
         thresh_dict = {}
         for idx, cls in enumerate(all_classes):
-            fpr, tpr, thr = roc_curve(Y_true[:,idx], Y_score[:,idx])
-            fpr_dict[cls]     = fpr
-            tpr_dict[cls]     = tpr
-            thresh_dict[cls]  = thr
+            fpr, tpr, thr = roc_curve(Y_true[:, idx], Y_score[:, idx])
+            fpr_dict[cls]    = fpr
+            tpr_dict[cls]    = tpr
+            thresh_dict[cls] = thr
 
-        # Overall AUC
+        # Step 5: Compute overall AUC
         roc_auc = roc_auc_score(Y_true, Y_score, average=average)
 
         return fpr_dict, tpr_dict, thresh_dict, roc_auc, Y_true, Y_score
