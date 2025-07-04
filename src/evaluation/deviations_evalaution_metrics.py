@@ -12,8 +12,7 @@ class EvaluationMetrics:
 
     def precision_deviation(self):
         """
-        
-        
+        Calculates the precision of the deviation prediction per prefix length and total.
         """
         precision_dev = {}
         total_tp = 0
@@ -53,8 +52,7 @@ class EvaluationMetrics:
     
     def recall_deviation(self):
         """
-        
-        
+        Caluclates the recall of the deivation prediction per prefix length and total.
         """
         recall_dev = {}
         total_tp = 0
@@ -94,8 +92,7 @@ class EvaluationMetrics:
     
     def probabilistic_roc_deviation_multilabel(self, average='macro'):
         """
-        
-        
+        Calculates the ROC and AUC value per class (model or log move)
         """
         
         # Collect all classes: All model and log moves either predicted or in target or in both
@@ -184,6 +181,9 @@ class EvaluationMetrics:
 
     
     def compute_class_coverage(self, target_all: Dict, target_risk: Dict):
+        """
+        Check how many times target classes are predicted and how many times unseen are predicted.
+        """
         # Collect classes in full set
         classes_tgt = set()
         for vals in target_all.values():
@@ -213,10 +213,11 @@ class EvaluationMetrics:
                 model_move_set = set(model_move)
                 log_move_set = set(log_moves[i])
                 
+                # Coun how often the classes in the target are predicted over the samples:
                 for i, c in enumerate(classes_tgt):
                     if c in model_move_set or c in log_move_set:
                         classes_prob_tgt[i] += 1
-                        
+                # Count how often the classes in the predictions/ not in the target are predicted over the samples:        
                 for i, c in enumerate(classes_unseen):
                     if c in model_move_set or c in log_move_set:
                         classes_prob_unseen[i] += 1
