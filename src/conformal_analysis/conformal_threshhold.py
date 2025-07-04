@@ -16,7 +16,7 @@ class ConformalAnalysisThreshold:
         self.d_con_results = d_con_results
         self.conformance_object = conformance_object
          
-    def simple_threshold_q(self, alpha):
+    def split_icp(self, alpha):
         """
         Original single-threaded implementation.
         """
@@ -57,14 +57,22 @@ class ConformalAnalysisThreshold:
         q_value_samples = sampled_fitness_scores_sorted[q_index][0]
 
         return q_value_target, q_value_most_likely, q_value_samples
+    
+    
+    def mondrian_monte_carlo_split_icp(self, alpha_low_risk: Optional[float]=0.5, alpha_risk: Optional[float]=0.25, alpha_high_risk:Optional[float]=0.1):
+        """
+        Mondrian, Monte Carlo Conformal Analysis:
+        - Miscoverage levels: alphas
+        - Mondrian: Determine alpha-thresholds for each (input) prefix length. 
+        (this is most useful for datasets with large class imbalances, as it generates a threshold per class  instead of one threshold for all classes.)
+        - Uses Monte Carlo: T samples suffixes per prefix length
         
-    def threshold_q_per_prefix_length(self, alpha_risk, alpha_high_risk: float):
+        """
         
         fitness_score_result_groups = defaultdict(lambda: {'target_fitness_score': [],
                                                            'most_likely_fitness_score': [],
                                                            'sampled_case_fitness_scores': [],
-                                                           'sampled_case_mean_std_fitness': []
-                                                           })
+                                                           'sampled_case_mean_std_fitness': []})
         
         # Iterate thorugh all processed result pickles
         for result in self.d_con_results:
@@ -75,21 +83,24 @@ class ConformalAnalysisThreshold:
 
                 # Fitness score target
                 fitness_score_result_groups[prefix_length]['target_fitness_score'].append(t_con['fitness'])
+                
                 # Fitness score most likely
                 fitness_score_result_groups[prefix_length]['most_likely_fitness_score'].append(m_con['fitness'])
 
                 # All fitness scores for all T samples:
                 fitness_samples = np.array([x['fitness'] for x in samples_cons])
                 fitness_score_result_groups[prefix_length]['sampled_case_fitness_scores'].append({case_name: fitness_samples})
-
                 # Mean of all fitness scores
                 mean_fitness_samples = fitness_samples.mean()
-                # Standard deviation of all fitness scores (to mean)
-                # All MC samples are the entire population so to compute std use 1/T:
+                # Standard deviation of all fitness scores (to mean): All MC samples are the entire population so to compute std use 1/T:
                 std_fitness_samples = fitness_samples.std()
                 fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'].append({case_name: (mean_fitness_samples, std_fitness_samples)})
-
+        
+        alphas = (alpha_low_risk, alpha_risk, alpha_high_risk)
+        
+        # Store fitness values for all samples, mean and sds
         case_name_fitness_scores_per_prefix_length = {}
+        # Store mean target most likely and samples fitness
         mean_tgts_ml_samples_per_prefix_length = {}
         
         # Standard Deviations: 
@@ -97,11 +108,14 @@ class ConformalAnalysisThreshold:
         # (2): Standard Deviation of the mean fitness scores of the samples (Global Conformal Uncertainty)
         std_samples_per_prefix_length = {}
         
-        # Risk Threshold values:
+        # Low Risk Threshold values: alpha = 0.5
         q_samples_per_prefix_length = {}
         
-        # High-Risk Threshold value:
+        # Risk Threshold value: alpha = 0.25
         r_samples_per_prefix_length = {}
+        
+        # High Risk Threshold: alpha = 0.1
+        z_samples_per_prefix_length = {}
 
         # Iterate through the conformance results by ascending prefix lengths:
         for prefix_length in sorted(fitness_score_result_groups):
@@ -137,25 +151,36 @@ class ConformalAnalysisThreshold:
             between_std_means_sm = np.std(mean_samples, ddof=1)
             std_samples_per_prefix_length[prefix_length] = (within_mean_stds_sm, between_std_means_sm)
 
-            # Get α (miscoverage: risk and high risk set) thresholds:
-            sorted_means = sorted(mean_samples)
-            n = len(sorted_means)
+            # Get α (miscoverage: low risk, risk and high risk set) thresholds:
+            # Ensure 1-alpha coverage:
+            # s = 1 - f: The smaller the better
+            sorted_inverse_fit = sorted([1-m for m in mean_samples])            
+            n = len(sorted_inverse_fit)
+            
+            # Low Risk:
+            # -1 to get index zero:
+            index_f_scores = math.ceil((n+1) * (1-alpha_low_risk)) - 1
+            index_f_scores = min(max(index_f_scores, 0), n-1)
+            q_sm = sorted_inverse_fit[index_f_scores]   
+            q_samples_per_prefix_length[prefix_length] = 1-q_sm 
             
             # Risk:
-            index_f_scores = math.floor((n + 1) * alpha_risk) - 1
-            index_f_scores = min(max(index_f_scores, 0), n - 1)
-            q_sm = sorted_means[index_f_scores]   
-            q_samples_per_prefix_length[prefix_length] = q_sm
-
+            index_f_scores = math.ceil((n+1) * (1-alpha_risk)) - 1
+            index_f_scores = min(max(index_f_scores, 0), n-1)
+            r_sm = sorted_inverse_fit[index_f_scores]   
+            r_samples_per_prefix_length[prefix_length] = 1-r_sm 
+            
             # High Risk:
-            index_f_scores = math.floor((n + 1) * alpha_high_risk) - 1
-            index_f_scores = min(max(index_f_scores, 0), n - 1)
-            r_sm = sorted_means[index_f_scores]   
-            r_samples_per_prefix_length[prefix_length] = r_sm
+            index_f_scores = math.ceil((n+1) * (1-alpha_high_risk)) - 1
+            index_f_scores = min(max(index_f_scores, 0), n-1)
+            z_sm = sorted_inverse_fit[index_f_scores]   
+            z_samples_per_prefix_length[prefix_length] = 1-z_sm
 
-        return (case_name_fitness_scores_per_prefix_length,
+        return (alphas,
+                case_name_fitness_scores_per_prefix_length,
                 mean_tgts_ml_samples_per_prefix_length,
                 std_samples_per_prefix_length,
                 q_samples_per_prefix_length,
-                r_samples_per_prefix_length)
+                r_samples_per_prefix_length,
+                z_samples_per_prefix_length)
         

@@ -19,14 +19,18 @@ class ConformalRiskUncertaintyPrediction:
         self.log_name = log_name
 
             
-    def conformal_set_predictions(self, q_threshold_prefix_lengths: Dict[int, float], r_threshold_prefix_lengths: Dict[int, float]):   
+    def conformal_set_predictions(self, 
+                                  q_threshold_prefix_lengths: Dict[int, float],
+                                  r_threshold_prefix_lengths: Dict[int, float],
+                                  z_threshold_prefix_lengths: Dict[int, float]):   
         """
         Partition cases into 'risk' and 'high risk' based on conformal fitness thresholds.
 
         Returns:
-            all_gropu: 
-            risk_group, high_risk_group: 
-            discarded_risk_group: 
+            all_group: 
+            low_risk_group
+            risk_group
+            high_risk_group: 
         """
         
         # All cases:
@@ -38,21 +42,21 @@ class ConformalRiskUncertaintyPrediction:
                                          'sd_samples_fitness': []
                                          })
         # Risk-flagged cases: 
+        low_risk_group = defaultdict(lambda: {'test_case_id': [],
+                                              'target_conformance': [],
+                                              'most_likely_conformance': [],
+                                              'samples_conformance': [],
+                                              'mean_samples_fitness': [],
+                                              'sd_samples_fitness': []
+                                            })
+        # Risk cases
         risk_group = defaultdict(lambda: {'test_case_id': [],
                                           'target_conformance': [],
                                           'most_likely_conformance': [],
                                           'samples_conformance': [],
                                           'mean_samples_fitness': [],
                                           'sd_samples_fitness': []
-                                        })
-        # Discarded Risk cases (Not Risk):
-        discarded_risk_group = defaultdict(lambda: {'test_case_id': [],
-                                                    'target_conformance': [],
-                                                    'most_likely_conformance': [],
-                                                    'samples_conformance': [],
-                                                    'mean_samples_fitness': [],
-                                                    'sd_samples_fitness': []
-                                                    })
+                                          })
         # High-Risk flagged cases:
         high_risk_group = defaultdict(lambda: {'test_case_id': [],
                                                'target_conformance': [],
@@ -61,14 +65,6 @@ class ConformalRiskUncertaintyPrediction:
                                                'mean_samples_fitness': [],
                                                'sd_samples_fitness': []
                                             })
-        # Discarded High-Risk cases (Risk but not High-Risk):
-        discarded_high_risk_group = defaultdict(lambda: {'test_case_id': [],
-                                                         'target_conformance': [],
-                                                         'most_likely_conformance': [],
-                                                         'samples_conformance': [],
-                                                         'mean_samples_fitness': [],
-                                                         'sd_samples_fitness': []
-                                                        })
         
         # Iterate through all processed result pickles
         for result in self.d_inference_results:
@@ -92,63 +88,58 @@ class ConformalRiskUncertaintyPrediction:
                 
                 # Select conformal thresholds for this prefix length
                 if prefix_length in q_threshold_prefix_lengths.keys():
+                    # Low-Risk: alpha = 0.5
                     q_cf = q_threshold_prefix_lengths[prefix_length]
+                    # Risk: alpha = 0.25
                     r_cf = r_threshold_prefix_lengths[prefix_length]
+                    # High-Risk: alpha = 0.1
+                    z_cf = z_threshold_prefix_lengths[prefix_length]
                 else:
                     # Use last available thresholds if prefix_length not in dict
+                    # Low-Risk
                     last_q = list(q_threshold_prefix_lengths.values())[-1]
                     q_cf = last_q
-                    
+                    # Risk
                     last_r = list(r_threshold_prefix_lengths.values())[-1]
                     r_cf = last_r
+                    # High-Risk
+                    last_z = list(z_threshold_prefix_lengths.values())[-1]
+                    z_cf = last_z
                 
-                # Risk Threshold: Risk-flagged cases:
+                # Low Risk Threshold
                 if mean_fitness < q_cf:
-                     # Append values
-                    risk_group[prefix_length]['test_case_id'].append((case_name, prefix_length))
-                    risk_group[prefix_length]['target_conformance'].append(t_con)
-                    risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
-                    risk_group[prefix_length]['samples_conformance'].append(samples_cons)
-                    risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
-                    risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
+                    low_risk_group[prefix_length]['test_case_id'].append((case_name, prefix_length))
+                    low_risk_group[prefix_length]['target_conformance'].append(t_con)
+                    low_risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
+                    low_risk_group[prefix_length]['samples_conformance'].append(samples_cons)
+                    low_risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
+                    low_risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
                     
-                    # High-Risk Threshold: High-Risk-flagged cases:
+                    # Risk Threshold
                     if mean_fitness < r_cf:
-                        high_risk_group[prefix_length]['test_case_id'].append(values)
-                        high_risk_group[prefix_length]['target_conformance'].append(t_con)
-                        high_risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
-                        high_risk_group[prefix_length]['samples_conformance'].append(samples_cons)
-                        high_risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
-                        high_risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
-                    else:
-                        # Discarded (flagged as risk but not as high risk)
-                        discarded_high_risk_group[prefix_length]['test_case_id'].append(values)
-                        discarded_high_risk_group[prefix_length]['target_conformance'].append(t_con)
-                        discarded_high_risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
-                        discarded_high_risk_group[prefix_length]['samples_conformance'].append(samples_cons)
-                        discarded_high_risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
-                        discarded_high_risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)   
-                else:
-                    # Discarded (not flagged as risk)
-                    discarded_risk_group[prefix_length]['test_case_id'].append((case_name, prefix_length))
-                    discarded_risk_group[prefix_length]['target_conformance'].append(t_con)
-                    discarded_risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
-                    discarded_risk_group[prefix_length]['samples_conformance'].append(samples_cons)
-                    discarded_risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
-                    discarded_risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
+                        risk_group[prefix_length]['test_case_id'].append((case_name,prefix_length))
+                        risk_group[prefix_length]['target_conformance'].append(t_con)
+                        risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
+                        risk_group[prefix_length]['samples_conformance'].append(samples_cons)
+                        risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
+                        risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
+                        
+                        # High-Risk Threshold
+                        if mean_fitness < z_cf:
+                            high_risk_group[prefix_length]['test_case_id'].append((case_name, prefix_length))
+                            high_risk_group[prefix_length]['target_conformance'].append(t_con)
+                            high_risk_group[prefix_length]['most_likely_conformance'].append(ml_con)
+                            high_risk_group[prefix_length]['samples_conformance'].append(samples_cons)
+                            high_risk_group[prefix_length]['mean_samples_fitness'].append(mean_fitness)
+                            high_risk_group[prefix_length]['sd_samples_fitness'].append(sd_fitness)
                 
         # Sort groups by prefix length ascending
         sorted_all_group = OrderedDict(sorted(all_group.items(), key=lambda item: item[0]))
-        
+        sorted_low_risk_group = OrderedDict(sorted(low_risk_group.items(), key=lambda item: item[0]))
         sorted_risk_group = OrderedDict(sorted(risk_group.items(), key=lambda item: item[0]))
-        sorted_discarded_risk_group = OrderedDict(sorted(discarded_risk_group.items(), key=lambda item: item[0]))
-        
         sorted_high_risk_group = OrderedDict(sorted(high_risk_group.items(), key=lambda item: item[0]))
-        sorted_discarded_high_risk_group = OrderedDict(sorted(discarded_high_risk_group.items(), key=lambda item: item[0]))
-        
 
         return (sorted_all_group,
+                sorted_low_risk_group,
                 sorted_risk_group,
-                sorted_discarded_risk_group,
-                sorted_high_risk_group,
-                sorted_discarded_high_risk_group)
+                sorted_high_risk_group)

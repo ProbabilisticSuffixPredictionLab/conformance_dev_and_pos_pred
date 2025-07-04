@@ -61,9 +61,66 @@ class ConformalEvaluation:
                  coverage_pref_len,
                  coverage_perfect_fitness)
         
-    def size(self, cov_set: Dict, miscov_set: Dict):
-        avg_size_cov_set = np.mean([len(cons) for _, cons in cov_set.items()])
-        avg_size_miscov_set = np.mean([len(cons) for _, cons in miscov_set.items()])
+    
+    @staticmethod
+    def __build_safe_set_risk(results_all, results_risk) -> Dict:
+        """
+        Return a dict mapping prefix_len → dict-of-lists,
+        containing only those entries in results_all whose test_case_id
+        is NOT in the corresponding results_low_risk[test_case_id].
+        """
+        # Grab all the metric‐names (fields) once
+        fields = list(results_all[next(iter(results_all))].keys())
         
-        return avg_size_cov_set, avg_size_miscov_set
+        # 2) precompute for each prefix the set of low‐risk IDs
+        risk_id_sets = {
+            pref: set(v.get('test_case_id', []))
+            for pref, v in results_risk.items()
+        }
+        
+        safe_set_risk = {}
+        
+        # 3) for each prefix in ALL, build your filtered lists
+        for pref, vals in results_all.items():
+            risk_ids = risk_id_sets.get(pref, set())
+            ids = vals['test_case_id']
+            
+            # build a boolean mask: True if that index is "safe"
+            keep_mask = [tc_id not in risk_ids for tc_id in ids]
+            if not any(keep_mask):
+                continue
+            
+            # allocate a new dict of empty lists
+            filtered = {field: [] for field in fields}
+            
+            # one pass: for each index i, if keep_mask[i] is True, append vals[field][i]
+            for i, keep in enumerate(keep_mask):
+                if not keep:
+                    continue
+                for field in fields:
+                    filtered[field].append(vals[field][i])
+            
+            safe_set_risk[pref] = filtered
+        
+        return safe_set_risk
+    
+    def size(self, all_set: Dict, miscov_set: Dict):
+        
+        cov_set = self.__build_safe_set_risk(results_all=all_set, results_risk=miscov_set)
+        
+        sizes_cov_sets = {}
+        sizes_miscov_set = {}
+         
+        for pref_len in cov_set.keys():
+            sizes_cov_sets[pref_len] = len_cons = len(cov_set[pref_len]['test_case_id'])
+            
+            if pref_len in miscov_set.keys():
+                sizes_miscov_set[pref_len] = len(miscov_set[pref_len]['test_case_id'])
+            else:
+                sizes_miscov_set[pref_len] = 0 
+        
+        avg_size_cov_set = np.mean([cons for _, cons in sizes_cov_sets.items()])        
+        avg_size_miscov_set = np.mean([cons for _, cons in sizes_miscov_set.items()])
+        
+        return sizes_cov_sets, avg_size_cov_set, sizes_miscov_set, avg_size_miscov_set
         

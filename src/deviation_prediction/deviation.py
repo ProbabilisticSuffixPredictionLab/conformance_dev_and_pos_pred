@@ -13,8 +13,7 @@ class Deviation:
         """
         
         """
-        deviations = defaultdict(lambda: {'model_moves': [],
-                                          'log_moves': []})
+        deviations = defaultdict(lambda: {'model_moves': [], 'log_moves': []})
         
         # For target and most_likely:
         for pref_len, conformance_dicts in conformance.items():
@@ -35,6 +34,7 @@ class Deviation:
     
     def individual_deviations_target(self, target_conformance):
         """
+        Model and log moves that are in the target.
         
         """
         deviations = self.__deviations(conformance=target_conformance)
@@ -43,7 +43,7 @@ class Deviation:
     
     def individual_deviations_most_likely(self, most_likely_conformance):
         """
-        
+        Model and log moves that are in the most-likely.
         """
         deviations = self.__deviations(conformance=most_likely_conformance)
 
@@ -53,7 +53,7 @@ class Deviation:
     def __samples_deviations(move_lists, beta, prob: Optional[bool]=False):
         """
         move_lists: List[List[tuple]]  — one list of moves per sample
-        beta: float in (0,1)           — fraction threshold
+        beta: float in (0,1)           — fraction threshold -> 0 all deviations over the samples, 1 only the deviations that occur across all samples.
         returns: List[tuple]           — moves appearing in ≥ beta fraction of samples
         """
         N = len(move_lists)
@@ -70,6 +70,7 @@ class Deviation:
         
         if prob:
             # Return deviation dict with deviation and probability across all MC smaples.
+            # No duplicates possible!
             deviations = {move: c/N for move, c in cnt.items() if c >= thresh}
         else:
             # Return deviation list.
@@ -81,8 +82,7 @@ class Deviation:
         """
         
         """
-        deviations = defaultdict(lambda: {'model_moves': [],
-                                          'log_moves': []})
+        deviations = defaultdict(lambda: {'model_moves': [], 'log_moves': []})
         
         # For target and most_likely:
         for pref_len, samples_list in samples_conformance.items():
@@ -101,8 +101,9 @@ class Deviation:
                     sample_model_moves = [ (a, b) for (a, b) in alignment if a!= None and b != None and a != '>>' and b == '>>']
                     model_moves.append(sample_model_moves)
                     
+                    # Log moves:
                     sample_log_moves = [ (a, b) for (a, b) in alignment if a!= None and b != None and a == '>>' and b != '>>']
-                    model_moves.append(sample_log_moves)
+                    log_moves.append(sample_log_moves)
                
                 top_model_moves = self.__samples_deviations(move_lists=model_moves,beta=beta_threshold, prob=probabilistic)
                 top_log_moves = self.__samples_deviations(move_lists=log_moves, beta=beta_threshold, prob=probabilistic)

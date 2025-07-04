@@ -1,0 +1,49 @@
+
+1 - Conformal Analysis:
+
+# Dict sorted according to prefx lengths:
+results = {
+    # Miscoverage Values:
+    "alphas": alphas,
+
+    # dict: prefix length, dict: case name, (List of fitness scores, mean fitness scores, std fitness scores)
+    "case_name_fitness_scores_per_prefix_length": case_name_fitness_scores_per_prefix_length,
+
+    # dict: prefix length, (mean target fitness score, mean most likely fitness score, mean means samples fitness scores)
+    "mean_tgts_ml_samples_per_prefix_length": mean_tgts_ml_samples_per_prefix_length,
+
+    # dict: prefix length, (mean of std within fitness scores, std of mean sampled fitness scores)
+    "std_samples_per_prefix_length": std_samples_per_prefix_length,
+
+    # dict: prefix length, r: sampled fitness score threshold lower bound with 1-alpha coverage.
+    "q_samples_per_prefix_length": q_samples_per_prefix_length,
+
+    # dict: prefix length, r: sampled fitness score threshold lower bound with 1-alpha coverage.
+    "r_samples_per_prefix_length": r_samples_per_prefix_length
+
+    # dict: prefix length, r: sampled fitness score threshold lower bound with 1-alpha coverage.
+    "z_samples_per_prefix_length": z_samples_per_prefix_length
+}
+
+2 - Conformal Prediction:
+
+# Dict sorted according to prefix lengths
+results = defaultdict(lambda: {
+    # Case ID = (Case Name, Prefix length)
+    'test_case_id': [],
+    
+    # list of dicts: {'alignment': ..., 'cost': ..., 'fitness': ...} for each case with same pref len dict.
+    'target_conformance': [],
+    
+    # list of dicts: {'alignment': ..., 'cost': ..., 'fitness': ...} for each case with same pref len dict.
+    'most_likely_conformance': [],
+    
+    # list of lists (For all 1000 MC samples) of dicts: {'alignment': ..., 'cost': ..., 'fitness': ...} for each case with same pref len dict.
+    'samples_conformance': [],
+    
+    # list of fitness scores
+    'mean_samples_fitness': [],
+    
+    # list of sd scores
+    'sd_samples_fitness': []
+})
