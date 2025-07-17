@@ -117,7 +117,6 @@ class EvaluationMetrics:
             # For each prefix length get all cases model and log move: list of dicts
             pred = self.pred_alignments.get(pref, {'model_moves': [], 'log_moves': []})
 
-            
             # Target and predicted contain same lenght of cases
             # Iterate through all cases deviations: Model and Log moves have same length and can both be seen as classes of deviations
             max_len = len(tgt['model_moves'])
@@ -154,7 +153,7 @@ class EvaluationMetrics:
         
         # Filter out only the valid classes:
         # Valid class for ROC needs at least one positive example and at least one negative example in the target across all cases.
-        # If a deviation form the prediction never happens in the targets or happens always no ROC can bebuild for that class since variation is required.
+        # If a deviation form the prediction never happens in the targets or happens always no ROC can be build for that class since variation is required.
         valid_classes = []
         for cls, idx in cls_to_idx.items():
             pos = int(Y_true[:, idx].sum())
@@ -222,7 +221,6 @@ class EvaluationMetrics:
                     if c in model_move_set or c in log_move_set:
                         classes_prob_unseen[i] += 1
                         
-                
         classes_prob_tgt = classes_prob_tgt / amount_cases
         
         classes_prob_unseen = classes_prob_unseen / amount_cases
