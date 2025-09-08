@@ -1,186 +1,80 @@
 import numpy as np
 import math
-from collections import defaultdict
-from typing import List, Dict, Optional, Any
-
-from conformance_checking.conformance import ConformanceChecking
+from typing import Any, Dict
 
 class ConformalAnalysisThreshold:
-    def __init__(self, d_con_results: List[Dict[str, Any]], conformance_object:ConformanceChecking , log_name: Optional[str] = ""):
+    def __init__(self, mondrian: bool, fitness_score_results: dict):
         """
-        d_con_results: List of dicts with evaluation results form the probabilistic suffix prediction model on the conformal dataset (validation).
-        conformance_object: A ConformanceChecking object -> Implements the chosen (alignment-based) conformance check algorithm.
-        log_name: Optional log name for identification.
+        - mondrian : bool: True means grouping.
+        - fitness_score_results : dict: Dict of fitness score results: 
+            - Case_ID: list of (case_name, prefix_length),
+            - 'target_fitness_score': list of fitness scores of targets,
+            - 'most_likely_fitness_score': list of fitness score of most-likelies,
+            - 'sampled_case_fitness_scores': list of fitness scores of samples (T=1000)
         """
-        self.log_name = log_name
-        self.d_con_results = d_con_results
-        self.conformance_object = conformance_object
-         
-    def split_icp(self, alpha):
+        self.mondrian = mondrian
+        self.fitness_score_results = fitness_score_results
+        
+    def _aggregate_samples_fitness(self, samples_fitness: np.ndarray, aggregation: str) -> float:
+        if aggregation == 'mean':
+            return float(np.mean(samples_fitness))
+        if aggregation == 'median':
+            return float(np.median(samples_fitness))
+        if aggregation == 'var':
+            return float(np.var(samples_fitness, ddof=1) if samples_fitness.size > 1 else 0.0)
+        if aggregation == 'min':
+            return float(np.min(samples_fitness))
+        if aggregation == 'max':
+            return float(np.max(samples_fitness))
+        raise ValueError(f"Unsupported aggregation: {aggregation}")
+        
+    def _value_at_quantiles(self, values: list, q_risk: float, q_highrisk: float) -> Dict[str, Any]:
         """
-        Original single-threaded implementation.
+        Given an unsorted list of floats, return the lower-tail empirical values at q_risk and q_highrisk.
         """
-        target_fitness_scores = []
-        most_likely_fitness_scores = []
-        sampled_fitness_scores = []
+        sorted_vals = sorted(values)  # ascending, smallest is the worst fitness
+        n = len(sorted_vals)
 
-        # Step 1: Compute fitness scores
-        for results in self.d_con_results:
-            for values in results.values():
-                target_conformance, most_likely_conformance, samples_conformances = self.conformance_object.conformance_of_sampled_suffixes(log_name=self.log_name, result_values=values)
-                
-                target_fitness_scores.append(target_conformance['fitness'])
-                most_likely_fitness_scores.append(most_likely_conformance['fitness'])
-                sampled_fitnessess = np.array([x['fitness'] for x in samples_conformances])
-                
-                sampled_fitness_scores.append((sampled_fitnessess.mean(), sampled_fitnessess.var(ddof=1)))
+        if n <= 0:
+            return -1
         
-        # Step 2: Sort based on mean of sampled fitness scores
-        target_fitness_scores_sorted = sorted(target_fitness_scores)
-        most_likely_fitness_scores_sorted = sorted(most_likely_fitness_scores)
-        sampled_fitness_scores_sorted = sorted(sampled_fitness_scores, key=lambda x: x[0])   
+        k_risk = math.floor((n + 1) * q_risk)
+        idx_risk = k_risk - 1
+        idx_risk = min(max(idx_risk, 0), n - 1)
+        
+        k_highrisk = math.floor((n + 1) * q_highrisk)
+        idx_highrisk = k_highrisk - 1
+        idx_risk = min(max(idx_highrisk, 0), n - 1)
+        
+        val_risk = sorted_vals[idx_risk] if idx_risk != -1 else None
+        val_highrisk = sorted_vals[idx_highrisk] if idx_highrisk != -1 else None
 
-        print("Sorted target fitness scores:", target_fitness_scores_sorted)
-        print("Sorted most likely fitness scores:", most_likely_fitness_scores_sorted)
-        print("Sorted sampled fitness scores:", sampled_fitness_scores_sorted)
+        return {'q_risk': val_risk, 'q_high_risk': val_highrisk}
 
-        # Step 3: Calculate quantile index (rounding up)
-        n = len(target_fitness_scores_sorted)
-
-        # For python indexing: Choose the vlaue (n + 1) * α) starting at index 1.
-        q_index = math.floor((n + 1) * alpha) - 1
-        q_index = min(max(q_index, 0), n - 1)
-        print("Q index: ", q_index)
-
-        q_value_target = target_fitness_scores_sorted[q_index]
-        q_value_most_likely = most_likely_fitness_scores_sorted[q_index]
-        q_value_samples = sampled_fitness_scores_sorted[q_index][0]
-
-        return q_value_target, q_value_most_likely, q_value_samples
-    
-    
-    def mondrian_monte_carlo_split_icp(self, alpha_low_risk: Optional[float]=0.5, alpha_risk: Optional[float]=0.25, alpha_high_risk:Optional[float]=0.1):
+    def empirical_quantile_thresholds(self, q_risk: float, q_high_risk: float, aggregation: str='mean') -> dict:
         """
-        Mondrian, Monte Carlo Conformal Analysis:
-        - Miscoverage levels: alphas
-        - Mondrian: Determine alpha-thresholds for each (input) prefix length. 
-        (this is most useful for datasets with large class imbalances, as it generates a threshold per class  instead of one threshold for all classes.)
-        - Uses Monte Carlo: T samples suffixes per prefix length
-        
+        Compute one-sided lower-tail empirical thresholds q_risk and q_high_risk.
         """
-        
-        fitness_score_result_groups = defaultdict(lambda: {'target_fitness_score': [],
-                                                           'most_likely_fitness_score': [],
-                                                           'sampled_case_fitness_scores': [],
-                                                           'sampled_case_mean_std_fitness': []})
-        
-        # Iterate thorugh all processed result pickles
-        for result in self.d_con_results:
-            # Results stored in one pickle
-            for (case_name, prefix_length), values in result.items():
-                # Conformance Analysis results: case, alignment, cost, fitness:
-                t_con, m_con, samples_cons = self.conformance_object.conformance_of_sampled_suffixes(log_name=self.log_name, result_values=values)
-
-                # Fitness score target
-                fitness_score_result_groups[prefix_length]['target_fitness_score'].append(t_con['fitness'])
-                
-                # Fitness score most likely
-                fitness_score_result_groups[prefix_length]['most_likely_fitness_score'].append(m_con['fitness'])
-
-                # All fitness scores for all T samples:
-                fitness_samples = np.array([x['fitness'] for x in samples_cons])
-                fitness_score_result_groups[prefix_length]['sampled_case_fitness_scores'].append({case_name: fitness_samples})
-                # Mean of all fitness scores
-                mean_fitness_samples = fitness_samples.mean()
-                # Standard deviation of all fitness scores (to mean): All MC samples are the entire population so to compute std use 1/T:
-                std_fitness_samples = fitness_samples.std()
-                fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'].append({case_name: (mean_fitness_samples, std_fitness_samples)})
-        
-        alphas = (alpha_low_risk, alpha_risk, alpha_high_risk)
-        
-        # Store fitness values for all samples, mean and sds
-        case_name_fitness_scores_per_prefix_length = {}
-        # Store mean target most likely and samples fitness
-        mean_tgts_ml_samples_per_prefix_length = {}
-        
-        # Standard Deviations: 
-        # (1): Mean of std within the sample fitness scores (Predictive Uncertainty), 
-        # (2): Standard Deviation of the mean fitness scores of the samples (Global Conformal Uncertainty)
-        std_samples_per_prefix_length = {}
-        
-        # Low Risk Threshold values: alpha = 0.5
-        q_samples_per_prefix_length = {}
-        
-        # Risk Threshold value: alpha = 0.25
-        r_samples_per_prefix_length = {}
-        
-        # High Risk Threshold: alpha = 0.1
-        z_samples_per_prefix_length = {}
-
-        # Iterate through the conformance results by ascending prefix lengths:
-        for prefix_length in sorted(fitness_score_result_groups):
+        if not self.mondrian:
+            # single (global) dict of lists
+            target = self.fitness_score_results['target_fitness_score']
+            ml = self.fitness_score_results['most_likely_fitness_score']
             
-            # Case: fitness scores, mean, std:
-            case_results = {}
-            # Iterate through case names and fitness scores
-            for d in fitness_score_result_groups[prefix_length]['sampled_case_fitness_scores']:
-                for case_name, fitness_scores in d.items():
-                    # Find the corresponding mean and std entry
-                    mean_std_tuple = next((m_std[case_name] for m_std in fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'] if case_name in m_std), (0, 0))
-                    case_results[case_name] = (fitness_scores, mean_std_tuple[0], mean_std_tuple[1])
-            # Add dict entry with prefix length: {case name: fitness_scores, mean, std} 
-            case_name_fitness_scores_per_prefix_length[prefix_length] = case_results
+            # Aggreagate the fitness samples (per case) to determine empirical thresholds:
+            sampled = self.fitness_score_results['sampled_case_fitness_scores']
+            aggragted_sampled = []
+            for smp in sampled:
+                aggragted_sampled.append(self._aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation))
 
-            # Means:            
-            # Mean of all target fitness scores with same prefix length:
-            mean_tgt = np.mean(fitness_score_result_groups[prefix_length]['target_fitness_score'])
-            # Mean of all most likely fitness scores with same prefix length:
-            mean_ml = np.mean(fitness_score_result_groups[prefix_length]['most_likely_fitness_score'])
+            res_target = self._value_at_quantiles(target, q_risk, q_high_risk)
+            res_ml = self._value_at_quantiles(ml, q_risk, q_high_risk)
+            res_sampled = self._value_at_quantiles(aggragted_sampled, q_risk, q_high_risk)
             
-            # Mean of all mean samples fitness scores
-            all_mean_stds = [v for d in fitness_score_result_groups[prefix_length]['sampled_case_mean_std_fitness'] for v in d.values()]
-            mean_samples = [m for m, _ in all_mean_stds]
-            mean_means_sm = np.mean(mean_samples)
-            mean_tgts_ml_samples_per_prefix_length[prefix_length] = (mean_tgt, mean_ml, mean_means_sm) 
+            results = {'target': res_target, 'most_likely': res_ml, 'sampled': res_sampled}
             
-            # Standard Deviations:
-            stds = [s for _, s in all_mean_stds]
-            # Mean of standard deviations within all samples fitness scores
-            within_mean_stds_sm = np.mean(stds)
-            # Standard deviation between all mean samlpled fitness scores
-            between_std_means_sm = np.std(mean_samples, ddof=1)
-            std_samples_per_prefix_length[prefix_length] = (within_mean_stds_sm, between_std_means_sm)
+        else:
+            # First sort according to prefix length:
+            pass
 
-            # Get α (miscoverage: low risk, risk and high risk set) thresholds:
-            # Ensure 1-alpha coverage:
-            # s = 1 - f: The smaller the better
-            sorted_inverse_fit = sorted([1-m for m in mean_samples])            
-            n = len(sorted_inverse_fit)
-            
-            # Low Risk:
-            # -1 to get index zero:
-            index_f_scores = math.ceil((n+1) * (1-alpha_low_risk)) - 1
-            index_f_scores = min(max(index_f_scores, 0), n-1)
-            q_sm = sorted_inverse_fit[index_f_scores]   
-            q_samples_per_prefix_length[prefix_length] = 1-q_sm 
-            
-            # Risk:
-            index_f_scores = math.ceil((n+1) * (1-alpha_risk)) - 1
-            index_f_scores = min(max(index_f_scores, 0), n-1)
-            r_sm = sorted_inverse_fit[index_f_scores]   
-            r_samples_per_prefix_length[prefix_length] = 1-r_sm 
-            
-            # High Risk:
-            index_f_scores = math.ceil((n+1) * (1-alpha_high_risk)) - 1
-            index_f_scores = min(max(index_f_scores, 0), n-1)
-            z_sm = sorted_inverse_fit[index_f_scores]   
-            z_samples_per_prefix_length[prefix_length] = 1-z_sm
-
-        return (alphas,
-                case_name_fitness_scores_per_prefix_length,
-                mean_tgts_ml_samples_per_prefix_length,
-                std_samples_per_prefix_length,
-                q_samples_per_prefix_length,
-                r_samples_per_prefix_length,
-                z_samples_per_prefix_length)
+        return results
         
