@@ -24,8 +24,7 @@ class ConformanceFitnessResults:
         fitness_score_results = {'Case_ID': [],
                                  'target_fitness_score': [],
                                  'most_likely_fitness_score': [],
-                                 'sampled_case_fitness_scores': []
-                                }
+                                 'sampled_case_fitness_scores': []}
         
         # Step Compute fitness scores
         for results in self.d_con_results:
