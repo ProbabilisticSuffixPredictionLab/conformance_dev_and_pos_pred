@@ -21,6 +21,8 @@ class ConformanceFitnessResults:
         Original single-threaded implementation.
         """
         
+        # Parallelize!
+        
         fitness_score_results = {'Case_ID': [],
                                  'target_fitness_score': [],
                                  'most_likely_fitness_score': [],
