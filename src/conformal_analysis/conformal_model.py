@@ -207,7 +207,7 @@ class ConformalAnalysisModel:
 
             return grouped_Qs
             
-    def risk_controlled_threshold(self, t_max, delta, alpha, min_count, eps=1e-4, B=1.0, max_iter=50, aggregation: str='mean'):
+    def risk_controlled_threshold(self, t_max, delta, alpha, min_count, eps=1e-4, B=1.0, aggregation: str='mean'):
         """
         Calibrate the empirical thresholds for q_risk and q_high_risk and q_save and deliver a guarentee that the global predicted fitness and the target fitness deviates only by delta with
         a 1-alpha finite sample guarentee using Conformal Risk Control.
@@ -269,7 +269,7 @@ class ConformalAnalysisModel:
             corrected = (len(aggregated_sampled_fitness)/(len(aggregated_sampled_fitness)+1.0))*Rn_expected_loss + (B/(len(aggregated_sampled_fitness)+1.0))
             
             if corrected < 0.0:
-                return {'lambda_hat': lam, 't_hat': (t_max -lam), 'info': info}
+                return {'lambda_hat': lam, 't_hat': (t_max -lam)}
             
             lam = lam + eps
         return None

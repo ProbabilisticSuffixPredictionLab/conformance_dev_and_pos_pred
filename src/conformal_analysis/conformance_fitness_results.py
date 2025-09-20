@@ -1,5 +1,4 @@
 import numpy as np
-from collections import defaultdict
 from typing import List, Dict, Optional, Any
 
 from conformance_checking.conformance import ConformanceChecking
@@ -7,7 +6,6 @@ from conformance_checking.conformance import ConformanceChecking
 class ConformanceFitnessResults:
     def __init__(self, log_name: Optional[str] = "", d_con_results: List[Dict[str, Any]] = None, conformance_object: ConformanceChecking = None):
         """
-        Constructor:
         - log_name: Optional log name for identification.
         - d_con_results: List of dicts with evaluation results form the probabilistic suffix prediction model on the conformal dataset (validation).
         - conformance_object: A ConformanceChecking object -> Implements the chosen (alignment-based) conformance check algorithm.
