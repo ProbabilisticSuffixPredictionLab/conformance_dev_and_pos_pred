@@ -65,6 +65,46 @@ class ConformalAnalysisVisualizations:
             return arr_num.astype(float)
 
         raise ValueError("Unsupported shape for samples_fitness")
+    
+    def _select_by_risk_group_or_bounds(self,
+                                        preds: np.ndarray,
+                                        lower_bound: float = None,
+                                        upper_bound: float = None,
+                                        clip_bounds: tuple = (0.0, 1.0)):
+        """
+        Build boolean mask selecting elements of preds according to either explicit bounds
+        or quantile alphas.
+
+        Priority:
+        1) If lower_bound or upper_bound is not None -> selection uses bounds.
+        2) Else if risk_group != 'all' -> selection uses alpha_highrisk/alpha_risk (quantiles).
+        3) Else -> select all.
+
+        Returns:
+        mask (bool array), info dict containing {'q_high':..., 'q_risk':..., 'bounds':(lower,upper)}
+        
+        """
+        preds = np.asarray(preds, dtype=float).flatten()
+        n = preds.size
+        # validate clip bounds for later checks
+        clip_lo, clip_hi = clip_bounds
+
+        # If explicit bounds provided -> use them
+        if (lower_bound is not None) or (upper_bound is not None):
+            if lower_bound is not None and not (clip_lo <= lower_bound <= clip_hi):
+                raise ValueError(f"lower_bound {lower_bound} outside clip_bounds {clip_bounds}")
+            if upper_bound is not None and not (clip_lo <= upper_bound <= clip_hi):
+                raise ValueError(f"upper_bound {upper_bound} outside clip_bounds {clip_bounds}")
+            lb = -np.inf if lower_bound is None else float(lower_bound)
+            ub = np.inf if upper_bound is None else float(upper_bound)
+            mask = (preds >= lb) & (preds <= ub)
+            info = {'q_high': None, 'q_risk': None, 'bounds': (lower_bound, upper_bound)}
+            return mask, info
+
+        # No explicit bounds -> use quantile-based selection if requested
+        else:
+            return np.ones(n, dtype=bool), {'q_high': None, 'q_risk': None, 'bounds': (None, None)}
+
 
     def plot_distribution(self,
                           aggregation='mean',
@@ -225,6 +265,8 @@ class ConformalAnalysisVisualizations:
     def plot_preds_vs_true_intervals(self,
                                     aggregation: str = 'mean',
                                     conformal_threshold: float = 0.05,
+                                    lower_bound: float = None,
+                                    upper_bound: float = None,
                                     max_points: int = 2000,
                                     clip_bounds: tuple = (0.0, 1.0),
                                     show_diagonal: bool = True,
@@ -256,74 +298,87 @@ class ConformalAnalysisVisualizations:
             raise ValueError(f"Length mismatch: aggregated samples ({preds.size}) vs target ({target.size}). "
                             "They must align 1:1.")
 
-        # --- compute intervals (symmetric) ---
-        lo = preds - float(conformal_threshold)
-        hi = preds + float(conformal_threshold)
-        # optional clipping (use same domain as your fitness values)
-        lo = np.clip(lo, clip_bounds[0], clip_bounds[1])
-        hi = np.clip(hi, clip_bounds[0], clip_bounds[1])
+        # select indices according to bounds or alphas
+        sel_mask, info = self._select_by_risk_group_or_bounds(preds,
+                                                             lower_bound=lower_bound,
+                                                             upper_bound=upper_bound,
+                                                             clip_bounds=clip_bounds)
+        sel_idx_full = np.nonzero(sel_mask)[0]
+        if sel_idx_full.size == 0:
+            raise ValueError("No points selected with the provided bounds/alphas/risk_group.")
 
-        # --- diagnostics ---
-        cov, inside = self.__empirical_coverage(lo, hi, target)
-        widths = hi - lo
+        # compute intervals for all -> we'll plot only selected
+        lo_all = np.clip(preds - float(conformal_threshold), clip_bounds[0], clip_bounds[1])
+        hi_all = np.clip(preds + float(conformal_threshold), clip_bounds[0], clip_bounds[1])
+
+        # subset arrays
+        preds_sel = preds[sel_idx_full]
+        target_sel = target[sel_idx_full]
+        lo_sel = lo_all[sel_idx_full]
+        hi_sel = hi_all[sel_idx_full]
+
+        inside = (target_sel >= lo_sel) & (target_sel <= hi_sel)
+        cov = float(np.mean(inside))
+        widths = hi_sel - lo_sel
         mean_width = float(np.mean(widths))
         median_width = float(np.median(widths))
-        n = preds.size
+        n = preds_sel.size
 
-        # --- plotting (use same colorway as empirical distribution) ---
-        # Blue = aggregated samples / intervals, Green = target points, Red = uncovered targets
-        # Limit number of points plotted for readability
+        # sample for plotting if large
         if n > max_points:
-            sel_idx = np.linspace(0, n-1, max_points).astype(int)
+            sample_idx = np.linspace(0, n-1, max_points).astype(int)
+            sel_plot_idx = sel_idx_full[sample_idx]
         else:
-            sel_idx = np.arange(n)
+            sel_plot_idx = sel_idx_full
 
-        covered_idx = sel_idx[inside[sel_idx]]
-        uncovered_idx = sel_idx[~inside[sel_idx]]
-
-        # --- compute axis limits: start at observed min if requested (with a small margin) ---
-        observed_min = float(min(np.min(preds), np.min(target)))
-        observed_max = float(max(np.max(preds), np.max(target)))
+        # axis limits built from selected subset
+        observed_min = float(min(np.min(preds_sel), np.min(target_sel)))
+        observed_max = float(max(np.max(preds_sel), np.max(target_sel)))
         obs_range = max(observed_max - observed_min, 1e-6)
         margin = max(0.02 * obs_range, 1e-4)
-
         if start_at_observed_min:
             x_left = max(clip_bounds[0], observed_min - margin)
         else:
             x_left = clip_bounds[0]
         x_right = min(clip_bounds[1], observed_max + margin)
-
-        # set same y-limits as well to square the plot on the same domain (useful for y=pred diagonal)
-        y_bottom = x_left
-        y_top = x_right
+        y_bottom, y_top = x_left, x_right
 
         plt.figure(figsize=(7, 7))
+        plt.vlines(preds[sel_plot_idx], ymin=lo_all[sel_plot_idx], ymax=hi_all[sel_plot_idx],
+                colors='tab:blue', alpha=0.6, linewidth=1, label='Interval (pred ± threshold)', zorder=1)
 
-        # Draw vertical interval lines for each chosen index (blue)
-        plt.vlines(preds[sel_idx], ymin=lo[sel_idx], ymax=hi[sel_idx],
-                colors='tab:blue', alpha=0.6, linewidth=1, label='Interval (pred ± bound)', zorder=1)
-
-        # Optionally draw a small horizontal tick at the prediction value to show x-position
-        tick_half = (x_right - x_left) * 0.002  # tiny horizontal tick relative scale
-        for idx in sel_idx:
+        tick_half = (x_right - x_left) * 0.002
+        for idx in sel_plot_idx:
             plt.plot([preds[idx] - tick_half, preds[idx] + tick_half],
                     [preds[idx], preds[idx]], color='tab:blue', alpha=0.6, linewidth=0.8, zorder=2)
 
-        # Plot target true values as green dots (full drawn indices)
-        plt.scatter(preds[covered_idx], target[covered_idx], c='tab:green', s=28, label='Target (covered)', zorder=4)
-        # Mark uncovered targets with red 'x'
-        if uncovered_idx.size > 0:
-            plt.scatter(preds[uncovered_idx], target[uncovered_idx], c='tab:red', s=50,
-                        marker='x', label='Target (uncovered)', zorder=5)
+        covered_mask_plot = (target[sel_plot_idx] >= lo_all[sel_plot_idx]) & (target[sel_plot_idx] <= hi_all[sel_plot_idx])
+        covered_idx_plot = sel_plot_idx[covered_mask_plot]
+        uncovered_idx_plot = sel_plot_idx[~covered_mask_plot]
 
-        # draw diagonal y = pred line if desired (helps spot bias)
+        plt.scatter(preds[covered_idx_plot], target[covered_idx_plot], c='tab:green', s=28, label='Target (covered)', zorder=4)
+        if uncovered_idx_plot.size > 0:
+            plt.scatter(preds[uncovered_idx_plot], target[uncovered_idx_plot], c='tab:red', s=50, marker='x', label='Target (uncovered)', zorder=5)
+
         if show_diagonal:
             plt.plot([x_left, x_right], [x_left, x_right], linestyle='--', color='gray', label='y = pred', zorder=0)
 
+        # annotate selection info
+        sel_text = []
+        if info.get('bounds') != (None, None):
+            lb, ub = info['bounds']
+            sel_text.append(f"bounds = [{lb if lb is not None else '-inf'} , {ub if ub is not None else 'inf'}]")
+        else:
+            if info.get('q_high') is not None:
+                sel_text.append(f"q_high={info['q_high']:.3f} (alpha_high={alpha_highrisk})")
+            if info.get('q_risk') is not None:
+                sel_text.append(f"q_risk={info['q_risk']:.3f} (alpha_risk={alpha_risk})")
+        sel_txt = " | ".join(sel_text) if sel_text else "group=all"
+
         plt.xlabel('Aggregated sample fitness (prediction)')
         plt.ylabel('Target fitness (true)')
-        title: str = 'Aggregated samples ± conformal threshold (conformal fitnes score interval) vs target'
-        plt.title(f"{title}\nemp. coverage = {cov:.3f} (n={n}), mean width = {mean_width:.4f}")
+        title_str = f"Aggregated samples ± conformal threshold vs target (selection: {sel_txt})"
+        plt.title(f"{title_str}\nemp. coverage = {cov:.3f} (n={n}), mean width = {mean_width:.4f}")
         plt.legend()
         plt.grid(alpha=0.2)
         plt.xlim(x_left, x_right)
@@ -335,6 +390,8 @@ class ConformalAnalysisVisualizations:
     def plot_coverage_by_pred_bin(self,
                                 aggregation: str = 'mean',
                                 conformal_threshold: float = 0.05,
+                                lower_bound: float = None,
+                                upper_bound: float = None,
                                 n_bins: int = 10,
                                 min_count_for_bin: int = 5,
                                 title: str = 'Coverage by predicted-value bin',
@@ -363,39 +420,41 @@ class ConformalAnalysisVisualizations:
         if preds.size != target.size:
             raise ValueError(f"Length mismatch: aggregated samples ({preds.size}) vs target ({target.size}). They must align 1:1.")
 
-        # --- compute symmetric intervals and clip to allowed domain ---
-        lo = preds - float(conformal_threshold)
-        hi = preds + float(conformal_threshold)
-        lo = np.clip(lo, clip_bounds[0], clip_bounds[1])
-        hi = np.clip(hi, clip_bounds[0], clip_bounds[1])
+        # selection mask and info
+        sel_mask, info = self._select_by_risk_group_or_bounds(preds,
+                                                        lower_bound=lower_bound,
+                                                        upper_bound=upper_bound,
+                                                        clip_bounds=clip_bounds)
+        sel_idx = np.nonzero(sel_mask)[0]
+        if sel_idx.size == 0:
+            raise ValueError("No points selected with the provided bounds/alphas/risk_group.")
 
-        # --- inside mask and widths ---
-        inside = (target >= lo) & (target <= hi)
+        lo_all = np.clip(preds - float(conformal_threshold), clip_bounds[0], clip_bounds[1])
+        hi_all = np.clip(preds + float(conformal_threshold), clip_bounds[0], clip_bounds[1])
+        lo = lo_all[sel_idx]; hi = hi_all[sel_idx]; preds_sel = preds[sel_idx]; y_sel = target[sel_idx]
+
+        inside = (y_sel >= lo) & (y_sel <= hi)
         widths = hi - lo
 
-        # overall/global diagnostics
-        global_coverage = float(np.mean(inside)) if preds.size > 0 else float('nan')
-        mean_width_overall = float(np.mean(widths)) if preds.size > 0 else float('nan')
+        global_coverage = float(np.mean(inside))
+        mean_width_overall = float(np.mean(widths))
 
-        # --- compute observed min/max and build bins starting at observed_min if requested ---
-        observed_min = float(min(np.min(preds), np.min(target)))
-        observed_max = float(max(np.max(preds), np.max(target)))
+        # determine bins over selected preds (same x_left behavior)
+        observed_min = float(np.min(preds_sel))
+        observed_max = float(np.max(preds_sel))
         obs_range = max(observed_max - observed_min, 1e-6)
         margin = max(0.02 * obs_range, 1e-4)
-
         if start_at_observed_min:
             left = max(clip_bounds[0], observed_min - margin)
         else:
             left = clip_bounds[0]
         right = min(clip_bounds[1], observed_max + margin)
-
-        # guard the degenerate case where left >= right
         if right <= left:
             left = max(clip_bounds[0], observed_min - margin)
             right = min(clip_bounds[1], observed_min + margin + 1e-3)
 
         bins = np.linspace(left, right, n_bins + 1)
-        bin_idx = np.digitize(preds, bins) - 1
+        bin_idx = np.digitize(preds_sel, bins) - 1
         bin_centers = 0.5 * (bins[:-1] + bins[1:])
 
         cov_by_bin = np.full(n_bins, np.nan)
@@ -413,24 +472,32 @@ class ConformalAnalysisVisualizations:
                 cov_by_bin[b] = np.nan
                 width_by_bin[b] = np.nan
 
-        # --- Plot coverage and mean width per bin ---
+        # Plot coverage
         fig, ax1 = plt.subplots(figsize=(9, 4))
         ax1.plot(bin_centers, cov_by_bin, marker='o', linestyle='-', label='empirical coverage', color='tab:blue')
         ax1.axhline(0.90, linestyle='--', color='gray', label='nominal 0.90')
         ax1.set_ylim(0, 1)
         ax1.set_xlabel('Predicted value (bin center)')
         ax1.set_ylabel('Empirical coverage')
-        ax1.set_title(title)
+
+        # subtitle with selection info
+        subtitle = f"(selection"
+        if info.get('bounds') != (None, None):
+            lb, ub = info['bounds']
+            subtitle += f" bounds=[{lb},{ub}]"
+        else:
+            if info.get('q_high') is not None:
+                subtitle += f" q_high={info['q_high']:.3f}"
+            if info.get('q_risk') is not None:
+                subtitle += f" q_risk={info['q_risk']:.3f}"
+        ax1.set_title(f"{title} {subtitle}")
         ax1.grid(alpha=0.2)
 
         # annotate counts above points
         for x, c in zip(bin_centers, counts):
             ax1.text(x, 0.03, f"n={c}", ha='center', va='bottom', fontsize=8, color='black')
 
-        # draw global coverage horizontal line and annotate with a boxed label
-        ax1.axhline(global_coverage, linestyle=':', color='black', linewidth=1.2,
-                    label=f'global coverage = {global_coverage:.3f}')
-        # text box on upper-right of the axes
+        # show global coverage/mean width
         bbox_text = dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='black')
         ax1.text(0.98, 0.98,
                 f"global cov = {global_coverage:.3f}\nmean width = {mean_width_overall:.3f}",
