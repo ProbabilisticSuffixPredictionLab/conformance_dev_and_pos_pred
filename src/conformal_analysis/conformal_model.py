@@ -5,16 +5,17 @@ from typing import Any, Dict
 class ConformalAnalysisModel:
     def __init__(self, mondrian: bool, fitness_score_results: dict):
         """
-        - mondrian : bool: True means grouping.
-        - fitness_score_results : dict: Dict of fitness score results: 
-            - Case_ID: list of (case_name, prefix_length),
-            - target_fitness_score: list of fitness scores of target, per case,
-            - most_likely_fitness_score: list of fitness score of most-likely, per case,
-            - sampled_case_fitness_scores: list of fitness scores of samples (T=1000), per case
+        mondrian : bool: True means grouping.
+        
+        fitness_score_results : dict: Dict of fitness score results: 
+            case_id: list of (case_name, prefix_length),
+            target_fitness: list of fitness scores of target, per case,
+            ml_fitness: list of fitness score of most-likely, per case,
+            samples_fitness: list of fitness scores of samples (T=1000), per case
         """
         self.mondrian = mondrian
         # pkl stores automatically in a list
-        self.fitness_score_results = fitness_score_results[0]
+        self.fitness_score_results = fitness_score_results
         
     def __aggregate_samples_fitness(self, samples_fitness: np.ndarray, aggregation: str) -> float:
         """
@@ -65,7 +66,7 @@ class ConformalAnalysisModel:
         
         return {'q_risk': val_risk, 'q_highrisk': val_highrisk}
     
-    """
+    
     def __mondrian_pref_len_grouping(self, fitness_score_results: dict) -> dict:
         # Ensure that all lists have same size:
         grouped = {}
@@ -84,7 +85,7 @@ class ConformalAnalysisModel:
 
         # return with keys sorted ascending
         return dict(sorted(grouped.items()))
-    """
+    
     
     def empirical_quantile_thresholds(self, q_risk: float, q_highrisk: float, aggregation: str='mean') -> dict:
         """

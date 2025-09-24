@@ -50,6 +50,9 @@ class EvaluationMetrics:
         return sorted_precision_dev, overall_precision
     
     
+    
+    
+    
     def recall_deviation(self):
         """
         Caluclates the recall of the deivation prediction per prefix length and total.
@@ -88,6 +91,9 @@ class EvaluationMetrics:
         sorted_recall_dev = OrderedDict(sorted(recall_dev.items(), key=lambda item: item[0]))
 
         return sorted_recall_dev, overall_recall
+    
+    
+    
     
     
     def probabilistic_roc_deviation_multilabel(self, average='macro'):
@@ -178,6 +184,10 @@ class EvaluationMetrics:
 
         return fpr_dict, tpr_dict, thr_dict, auc_macro, Y_true, Y_score, all_classes
 
+    
+    
+    
+    
     
     def compute_class_coverage(self, target_all: Dict, target_risk: Dict):
         """
