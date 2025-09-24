@@ -25,12 +25,16 @@ class ConformalAnalysisModel:
         
         if aggregation == 'mean':
             agg = float(np.mean(samples_fitness))
+        
         elif aggregation == 'median':
             agg = float(np.median(samples_fitness))
+        
         elif aggregation == 'min':
             agg = float(np.min(samples_fitness))
+        
         elif aggregation == 'max':
             agg = float(np.max(samples_fitness))
+        
         else:
             raise ValueError(f"Unsupported aggregation: {aggregation}")
         
@@ -59,8 +63,9 @@ class ConformalAnalysisModel:
         idx_highrisk = min(max(idx_highrisk, 0), n - 1)
         val_highrisk = sorted_vals[idx_highrisk] if idx_highrisk != -1 else None
         
-        return {'q_risk': val_risk, 'q_high_risk': val_highrisk}
+        return {'q_risk': val_risk, 'q_highrisk': val_highrisk}
     
+    """
     def __mondrian_pref_len_grouping(self, fitness_score_results: dict) -> dict:
         # Ensure that all lists have same size:
         grouped = {}
@@ -68,45 +73,46 @@ class ConformalAnalysisModel:
             prefix_len = case_id[1]  # assume Case_ID is (case_name, prefix_len)
             if prefix_len not in grouped:
                 grouped[prefix_len] = {
-                    'target_fitness_score': [],
-                    'most_likely_fitness_score': [],
-                    'sampled_case_fitness_scores': []
+                    'target_fitness': [],
+                    'ml_fitness': [],
+                    'samples_fitness': []
                 }
 
-            grouped[prefix_len]['target_fitness_score'].append(fitness_score_results['target_fitness_score'][i])
-            grouped[prefix_len]['most_likely_fitness_score'].append(fitness_score_results['most_likely_fitness_score'][i])
-            grouped[prefix_len]['sampled_case_fitness_scores'].append(fitness_score_results['sampled_case_fitness_scores'][i])
+            grouped[prefix_len]['target_fitness'].append(fitness_score_results['target_fitness'][i])
+            grouped[prefix_len]['ml_fitness'].append(fitness_score_results['ml_fitness'][i])
+            grouped[prefix_len]['samples_fitness'].append(fitness_score_results['samples_fitness'][i])
 
         # return with keys sorted ascending
         return dict(sorted(grouped.items()))
+    """
     
-    def empirical_quantile_thresholds(self, q_risk: float, q_high_risk: float, aggregation: str='mean') -> dict:
+    def empirical_quantile_thresholds(self, q_risk: float, q_highrisk: float, aggregation: str='mean') -> dict:
         """
-        Compute one-sided lower-tail empirical thresholds for q_risk and q_high_risk.
+        Compute one-sided lower-tail empirical thresholds for q_risk and q_highrisk.
         """
         if not self.mondrian:
             # Target
-            target_fitness_scores = self.fitness_score_results['target_fitness_score']
+            target_fitness_scores = self.fitness_score_results['target_fitness']
             # Get thresholds
-            thresholds_target = self.__value_at_quantiles(target_fitness_scores, q_risk, q_high_risk)
+            thresholds_target = self.__value_at_quantiles(target_fitness_scores, q_risk, q_highrisk)
             
             # Most likely
-            ml_fitness_scores = self.fitness_score_results['most_likely_fitness_score']
+            ml_fitness_scores = self.fitness_score_results['ml_fitness']
             # Get thresholds
-            thresholds_ml = self.__value_at_quantiles(ml_fitness_scores, q_risk, q_high_risk)
+            thresholds_ml = self.__value_at_quantiles(ml_fitness_scores, q_risk, q_highrisk)
             
             # Samples
-            sampled_fitness_scores = self.fitness_score_results['sampled_case_fitness_scores']
+            sampled_fitness_scores = self.fitness_score_results['samples_fitness']
             # Aggreagate the fitness samples (per case): Add tuples (aggregated, std)
             aggragted_sampled_fitness_scores = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
             # Get thresholds
-            thresholds_sampled = self.__value_at_quantiles([agg_smp[0] for agg_smp in aggragted_sampled_fitness_scores], q_risk, q_high_risk)
+            thresholds_sampled = self.__value_at_quantiles([agg_smp[0] for agg_smp in aggragted_sampled_fitness_scores], q_risk, q_highrisk)
             mean_std_sampled = np.nanmean([agg_smp[1] for agg_smp in aggragted_sampled_fitness_scores])
             thresholds_sampled['mean_std'] = mean_std_sampled
             
             return {'target': thresholds_target,
                     'most_likely': thresholds_ml,
-                    'sampled': thresholds_sampled}
+                    'samples': thresholds_sampled}
         
         # mondrian grouping (prefix len for simplicity)
         else:
@@ -115,32 +121,33 @@ class ConformalAnalysisModel:
             mondrian_grouped_fitness_scores = self.__mondrian_pref_len_grouping(fitness_score_results=self.fitness_score_results)
             # iterate through key: prefix_len, values: fitness_score_results dict
             for key, values in mondrian_grouped_fitness_scores.items():
-                target_fitness_scores = values['target_fitness_score']
+                target_fitness_scores = values['target_fitness']
                 # Get thresholds
-                thresholds_target = self.__value_at_quantiles(target_fitness_scores, q_risk, q_high_risk)
+                thresholds_target = self.__value_at_quantiles(target_fitness_scores, q_risk, q_highrisk)
                 
                 # Most likely
-                ml_fitness_scores = values['most_likely_fitness_score']
+                ml_fitness_scores = values['ml_fitness']
                 # Get thresholds
-                thresholds_ml = self.__value_at_quantiles(ml_fitness_scores, q_risk, q_high_risk)
+                thresholds_ml = self.__value_at_quantiles(ml_fitness_scores, q_risk, q_highrisk)
                 
                 # Samples
-                sampled_fitness_scores = values['sampled_case_fitness_scores']
+                sampled_fitness_scores = values['samples_fitness']
                 # Aggreagate the fitness samples (per case): Add tuples (aggregated, std)
                 aggragted_sampled_fitness_scores_std = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
                 # Get thresholds
-                thresholds_sampled = self.__value_at_quantiles([agg_smp[0] for agg_smp in aggragted_sampled_fitness_scores_std], q_risk, q_high_risk)
+                thresholds_sampled = self.__value_at_quantiles([agg_smp[0] for agg_smp in aggragted_sampled_fitness_scores_std], q_risk, q_highrisk)
                 mean_std_sampled = np.nanmean([agg_smp[1] for agg_smp in aggragted_sampled_fitness_scores_std])
                 thresholds_sampled['mean_std'] = mean_std_sampled
                 
                 results = {'target': thresholds_target,
                            'most_likely': thresholds_ml,
-                           'sampled': thresholds_sampled}    
+                           'samples': thresholds_sampled}    
 
                 grouped_results[key] = results
                 
             return grouped_results
              
+    
     def conformal_bound(self, aggregation: str='mean', alpha: float=0.1):
         """
         Ensure per sample guarantee by using conformal prediction on the fitness residuals.
@@ -174,9 +181,9 @@ class ConformalAnalysisModel:
             return Q_val
         
         if not self.mondrian:
-            target_fitness_scores = np.asarray(self.fitness_score_results['target_fitness_score'])
+            target_fitness_scores = np.asarray(self.fitness_score_results['target_fitness'])
             
-            sampled_fitness_scores = self.fitness_score_results['sampled_case_fitness_scores']    
+            sampled_fitness_scores = self.fitness_score_results['samples_fitness']    
             # Aggreagate the fitness samples (per case): Add tuples (aggregated, std)
             aggregated_sampled_pairs = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
             aggregated_sampled_fitness = np.asarray([smp[0] for smp in aggregated_sampled_pairs])
@@ -192,8 +199,8 @@ class ConformalAnalysisModel:
 
             for key, values in mondrian_grouped_fitness_scores.items():
                 # Expect values to be dicts with 'target_fitness_score' & 'sampled_case_fitness_scores'
-                target_fitness_scores = np.asarray(values['target_fitness_score'])
-                sampled_fitness_scores = values['sampled_case_fitness_scores']
+                target_fitness_scores = np.asarray(values['target_fitness'])
+                sampled_fitness_scores = values['samples_fitness']
 
                 # aggregate sampled fitnesses per case for this group
                 aggregated_sampled_pairs = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
@@ -207,6 +214,7 @@ class ConformalAnalysisModel:
 
             return grouped_Qs
             
+    
     def risk_controlled_threshold(self, t_max, delta, alpha, min_count, eps=1e-4, B=1.0, aggregation: str='mean'):
         """
         Calibrate the empirical thresholds for q_risk and q_high_risk and q_save and deliver a guarentee that the global predicted fitness and the target fitness deviates only by delta with
@@ -235,9 +243,9 @@ class ConformalAnalysisModel:
             return (corrected <= 0.0), {'count':count, 'Rn':Rn_expected_loss, 'corrected':corrected}
         """
         
-        target_fitness_scores = np.asarray(self.fitness_score_results['target_fitness_score'])
+        target_fitness_scores = np.asarray(self.fitness_score_results['target_fitness'])
             
-        sampled_fitness_scores = self.fitness_score_results['sampled_case_fitness_scores']
+        sampled_fitness_scores = self.fitness_score_results['samples_fitness']
         # Aggreagate the fitness samples (per case): Add tuples (aggregated, std)
         aggregated_sampled_pairs = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
         aggregated_sampled_fitness = np.asarray([smp[0] for smp in aggregated_sampled_pairs])

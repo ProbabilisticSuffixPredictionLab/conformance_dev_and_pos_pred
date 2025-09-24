@@ -30,7 +30,7 @@ class ConformanceChecking():
         target_case = prefix_activities + suffix_activities
         df_target_case = self.__create_df(cases=[target_case])
         
-        cf_target_cases = pm4py.conformance.conformance_diagnostics_alignments(df_target_case, pn, im, fm, multi_processing=True)
+        cf_target_cases = pm4py.conformance.conformance_diagnostics_alignments(df_target_case, pn, im, fm, multi_processing=False)
         target_case_alignment = {"target case": target_case,
                                  "alignment": cf_target_cases[0]['alignment'],
                                  "cost": cf_target_cases[0]['cost'],
@@ -41,7 +41,7 @@ class ConformanceChecking():
         mostlikely_case = prefix_activities + mostlikely_suffix_activities
         df_mostlikely_case = self.__create_df(cases=[mostlikely_case])
         
-        cf_mostlikely_cases = pm4py.conformance.conformance_diagnostics_alignments(df_mostlikely_case, pn, im, fm, multi_processing=True)
+        cf_mostlikely_cases = pm4py.conformance.conformance_diagnostics_alignments(df_mostlikely_case, pn, im, fm, multi_processing=False)
         mostlikely_case_alignment = {"most likely case": mostlikely_case,
                                      "alignment": cf_mostlikely_cases[0]['alignment'],
                                      "cost": cf_mostlikely_cases[0]['cost'],
@@ -52,7 +52,7 @@ class ConformanceChecking():
         predicted_sampled_cases = [prefix_activities + predicted_suffix for predicted_suffix in predicted_sampled_suffixes_activities]  
         df_sampled_cases = self.__create_df(cases=predicted_sampled_cases)
 
-        cf_sampled_cases = pm4py.conformance.conformance_diagnostics_alignments(df_sampled_cases, pn, im, fm, multi_processing=True)
+        cf_sampled_cases = pm4py.conformance.conformance_diagnostics_alignments(df_sampled_cases, pn, im, fm, multi_processing=False)
         predicted_sample_case_alignment = [{"sampled case": predicted_sampled_cases[i],
                                             "alignment": cf_res['alignment'],
                                             "cost": cf_res['cost'],

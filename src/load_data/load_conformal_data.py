@@ -20,7 +20,7 @@ def load_results(path: str) -> None:
             with file_path.open('rb') as f:
                 data = pickle.load(f)
                 results.append(data)
-                print(f"Loaded conformal result of .pkl: {file_path.name}")
+                # print(f"Loaded conformal result of .pkl: {file_path.name}")
                 
                 # i = i+1
                 # if i == 1:
