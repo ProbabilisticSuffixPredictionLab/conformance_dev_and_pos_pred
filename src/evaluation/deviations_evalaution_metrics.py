@@ -6,91 +6,37 @@ from sklearn.metrics import roc_curve, roc_auc_score
 
 class EvaluationMetrics:    
     def __init__(self, target_alignments: Optional[Dict]=None, predicted_alignments: Optional[Dict] = None):
+        # list of target alignments per case
         self.target_alignments = target_alignments
+        # list of 1000 sampled alignments per case
         self.pred_alignments = predicted_alignments
 
+    def _get_log_moves(alignment: list):
+        pass
+    
+    def _get_model_moves(alignment: list):
+        pass
+    
+    def get_deviations_per_case():
+        pass
 
     def precision_deviation(self):
         """
-        Calculates the precision of the deviation prediction per prefix length and total.
+        Calculates the precision of the deviation prediction.
         """
-        precision_dev = {}
-        total_tp = 0
-        total_fp = 0
-
-        for pref_len in self.target_alignments.keys():
-            model_moves_target = self.target_alignments[pref_len]['model_moves']
-            log_moves_target = self.target_alignments[pref_len]['log_moves']
-
-            if pref_len in self.pred_alignments:
-                model_moves_pred = self.pred_alignments[pref_len]['model_moves']
-                log_moves_pred = self.pred_alignments[pref_len]['log_moves']
-            else:
-                model_moves_pred = []
-                log_moves_pred = []
-
-            tp_model = sum(len(set(t) & set(p)) for t, p in zip(model_moves_target, model_moves_pred))
-            tp_log   = sum(len(set(t) & set(p)) for t, p in zip(log_moves_target, log_moves_pred))
-
-            fp_model = sum(len(set(p) - set(t)) for t, p in zip(model_moves_target, model_moves_pred))
-            fp_log   = sum(len(set(p) - set(t)) for t, p in zip(log_moves_target, log_moves_pred))
-
-            tp = tp_model + tp_log
-            fp = fp_model + fp_log
-
-            total_tp += tp
-            total_fp += fp
-
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-            precision_dev[pref_len] = precision
-
-        overall_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
-        sorted_precision_dev = OrderedDict(sorted(precision_dev.items(), key=lambda item: item[0]))
-
-        return sorted_precision_dev, overall_precision
-    
-    
-    
-    
-    
+        
     def recall_deviation(self):
         """
-        Caluclates the recall of the deivation prediction per prefix length and total.
+        Caluclates the recall of the deivation prediction.
         """
-        recall_dev = {}
-        total_tp = 0
-        total_fn = 0
-
-        for pref_len in self.target_alignments.keys():
-            model_moves_target = self.target_alignments[pref_len]['model_moves']
-            log_moves_target = self.target_alignments[pref_len]['log_moves']
-
-            if pref_len in self.pred_alignments:
-                model_moves_pred = self.pred_alignments[pref_len]['model_moves']
-                log_moves_pred = self.pred_alignments[pref_len]['log_moves']
-            else:
-                model_moves_pred = []
-                log_moves_pred = []
-
-            tp_model = sum(len(set(t) & set(p)) for t, p in zip(model_moves_target, model_moves_pred))
-            tp_log   = sum(len(set(t) & set(p)) for t, p in zip(log_moves_target, log_moves_pred))
-
-            fn_model = sum(len(set(t) - set(p)) for t, p in zip(model_moves_target, model_moves_pred))
-            fn_log   = sum(len(set(t) - set(p)) for t, p in zip(log_moves_target, log_moves_pred))
-
-            tp = tp_model + tp_log
-            fn = fn_model + fn_log
-
-            total_tp += tp
-            total_fn += fn
-
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-            recall_dev[pref_len] = recall
-            
-        overall_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0    
-        sorted_recall_dev = OrderedDict(sorted(recall_dev.items(), key=lambda item: item[0]))
-
-        return sorted_recall_dev, overall_recall
+        
+    
+    
+    
+    
+    
+    
+    
     
     
     
@@ -183,11 +129,6 @@ class EvaluationMetrics:
             raise ValueError("No multi-label has both positive and negative samples.")
 
         return fpr_dict, tpr_dict, thr_dict, auc_macro, Y_true, Y_score, all_classes
-
-    
-    
-    
-    
     
     def compute_class_coverage(self, target_all: Dict, target_risk: Dict):
         """
