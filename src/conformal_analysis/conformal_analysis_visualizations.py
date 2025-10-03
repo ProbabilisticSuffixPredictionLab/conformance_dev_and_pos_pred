@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+from typing import Optional
 
 class ConformalAnalysisVisualizations:
     def __init__(self, sampled_fitness, target_fitness, ml_fitness):
@@ -107,19 +108,21 @@ class ConformalAnalysisVisualizations:
 
 
     def plot_distribution(self,
-                          aggregation='mean',
+                          aggregation: Optional[str] = None,
                           bins=30,
                           show_kde=True,
-                          alpha_risk: float = None,
-                          alpha_highrisk: float = None):
+                          alpha_risk: float = 1.0,
+                          alpha_highrisk: Optional[float] = None):
         """
         Plot distribution of aggregated sample fitness and (optional) target fitness.
         Additionally: draw red vertical lines and annotate x-axis values for the empirical
         quantiles given by alpha_risk and alpha_highrisk (if provided).
         """
         # aggregate samples
-        smpls_fit = self.__aggregate_samples_fitness(samples_fitness=self.samples_fitness,
-                                                     aggregation=aggregation)
+        smpls_fit = None
+        if aggregation is not None:
+            smpls_fit = self.__aggregate_samples_fitness(samples_fitness=self.samples_fitness,
+                                                         aggregation=aggregation)
 
         # handle target_fitness
         target_fit = None
@@ -153,44 +156,53 @@ class ConformalAnalysisVisualizations:
         q_risk = None
         q_highrisk = None
         
-        if smpls_fit is None or smpls_fit.size == 0:
-            # nothing to plot; raise or return gracefully
-            raise ValueError("No aggregated sample fitness values to plot.")
-        if alpha_risk is not None:
-            if not (0.0 <= alpha_risk <= 1.0):
-                raise ValueError("alpha_risk must be in [0,1]")
-            q_risk = float(np.quantile(smpls_fit, alpha_risk))
+        # alpha risk
+        if not (0.0 <= alpha_risk <= 1.0):
+            raise ValueError("alpha_risk must be in [0,1]")
+        
+        q_risk = float(np.quantile(target_fit, alpha_risk))
+        print(q_risk)
+            
+        # alpha high risk
         if alpha_highrisk is not None:
             if not (0.0 <= alpha_highrisk <= 1.0):
                 raise ValueError("alpha_highrisk must be in [0,1]")
             q_highrisk = float(np.quantile(smpls_fit, alpha_highrisk))
 
-        # 1) Histogram (density) overlay
+        # Histogram (density) overlay
         plt.figure(figsize=(9, 5))
-        plt.hist(smpls_fit, bins=bins, density=True, alpha=0.6,
-                 edgecolor='black', linewidth=0.5, label='aggregated samples fitness', color='blue')
+        if smpls_fit is not None:
+            plt.hist(smpls_fit, bins=bins, density=True, alpha=0.6, edgecolor='black', linewidth=0.5, label='aggregated samples fitness', color='blue')
         if target_fit is not None:
-            plt.hist(target_fit, bins=bins, density=True, alpha=0.5,
-                     edgecolor='black', linewidth=0.5, label='target fitness', color='green')
+            plt.hist(target_fit, bins=bins, density=True, alpha=0.5, edgecolor='black', linewidth=0.5, label='target fitness', color='green')
 
-        # 2) KDE overlays (only if >1 sample)
+        # KDE overlays (only if >1 sample)
         if show_kde:
             try:
-                valid_xmin = float(smpls_fit.min())
-                valid_xmax = float(smpls_fit.max())
-                if target_fit is not None:
+                valid_xmin, valid_xmax = float('inf'), float('-inf')
+
+                if smpls_fit is not None and smpls_fit.size > 1:
+                    valid_xmin = min(valid_xmin, float(smpls_fit.min()))
+                    valid_xmax = max(valid_xmax, float(smpls_fit.max()))
+
+                if target_fit is not None and target_fit.size > 1:
                     valid_xmin = min(valid_xmin, float(target_fit.min()))
                     valid_xmax = max(valid_xmax, float(target_fit.max()))
-                x = np.linspace(valid_xmin, valid_xmax, 400)
 
-                if smpls_fit.size > 1:
+                if valid_xmin < valid_xmax:  # Ensure valid range for KDE
+                    x = np.linspace(valid_xmin, valid_xmax, 400)
+
+                if smpls_fit is not None and smpls_fit.size > 1:
                     kde_means = gaussian_kde(smpls_fit)
                     plt.plot(x, kde_means(x), lw=2, label='KDE (samples)', color='blue')
+
                 if target_fit is not None and target_fit.size > 1:
                     kde_target = gaussian_kde(target_fit)
                     plt.plot(x, kde_target(x), lw=2, label='KDE (target)', color='green')
-            except Exception:
-                # silently skip KDE if it fails (scipy missing or KDE error)
+
+            except Exception as e:
+                print(f"Error in KDE computation: {e}")
+                # Silently skip KDE if it fails (e.g., scipy missing or KDE error)
                 pass
 
         #  --- draw quantile vertical lines + annotate their numeric values on the x-axis ---
@@ -199,16 +211,16 @@ class ConformalAnalysisVisualizations:
         y_text_pos = ylim[0] + 0.03 * (ylim[1] - ylim[0])  # small offset above bottom
 
         if q_risk is not None:
-            ax.axvline(q_risk, color='red', linestyle='--', linewidth=2, label=f'quantile (risk={alpha_risk})')
-            # add numeric annotation slightly above the x-axis (centered)
-            ax.text(q_risk, y_text_pos, f"{q_risk:.3f}", color='red', ha='center', va='bottom', fontsize=9,
-                    backgroundcolor='white')
+            ax.axvline(q_risk, color='red', linestyle='--', linewidth=2, label=f'risk fitness threshold (alpha-risk quantile={alpha_risk})')
+            ax.text(q_risk, y_text_pos, f"{q_risk:.3f}", color='red', ha='center', va='bottom', fontsize=9, backgroundcolor='white')
 
         if q_highrisk is not None:
-            ax.axvline(q_highrisk, color='red', linestyle='-', linewidth=1.5,
-                       label=f'quantile (high risk={alpha_highrisk})')
-            ax.text(q_highrisk, y_text_pos, f"{q_highrisk:.3f}", color='red', ha='center', va='bottom', fontsize=9,
-                    backgroundcolor='white')
+            ax.axvline(q_highrisk, color='red', linestyle='-', linewidth=1.5, label=f'quantile (high risk={alpha_highrisk})')
+            ax.text(q_highrisk, y_text_pos, f"{q_highrisk:.3f}", color='red', ha='center', va='bottom', fontsize=9, backgroundcolor='white')
+
+        # Plot the risk threshold: q_risk with a red line
+        #if q_risk is not None:
+        #    plt.axvline(q_risk, color='red', linestyle='--', linewidth=2, label='Risk Threshold (q_risk)')
 
         plt.xlabel('(aggregated) fitness score')
         plt.ylabel('density')
@@ -217,42 +229,49 @@ class ConformalAnalysisVisualizations:
         plt.grid(axis='y', linestyle='--', alpha=0.35)
         plt.tight_layout()
         plt.show()
+        
+        return q_risk
 
+        """
         # 3) Boxplot (both distributions if present)
-        datasets = [smpls_fit]
-        labels = ['Data']
+        datasets = []
+        labels = []
+        if smpls_fit is not None:
+            datasets.append(smpls_fit)
+            labels.append('Data')
         if target_fit is not None:
             datasets.append(target_fit)
             labels.append('Target')
 
-        plt.figure(figsize=(8, 2.8))
-        box = plt.boxplot(datasets, vert=False, patch_artist=True, widths=0.6, labels=labels)
+        if datasets:
+            plt.figure(figsize=(8, 2.8))
+            box = plt.boxplot(datasets, vert=False, patch_artist=True, widths=0.6, labels=labels)
 
-        # style: color first blue, second green (if present)
-        colors = ['blue', 'green']
-        for i, b in enumerate(box['boxes']):
-            b.set(facecolor=colors[i % len(colors)])
+            # style: color first blue, second green (if present)
+            colors = ['blue', 'green']
+            for i, b in enumerate(box['boxes']):
+                b.set(facecolor=colors[i % len(colors)])
 
-        # Optionally mark quantiles on boxplot axis as vertical lines as well
-        ax2 = plt.gca()
-        if q_risk is not None:
-            ax2.axvline(q_risk, color='red', linestyle='--', linewidth=2)
-            ax2.text(q_risk, 0.95, f"{q_risk:.3f}", color='red', ha='center', va='top', fontsize=8,
-                     rotation=90, backgroundcolor='white')
-        if q_highrisk is not None:
-            ax2.axvline(q_highrisk, color='red', linestyle='-', linewidth=1.5)
-            ax2.text(q_highrisk, 0.95, f"{q_highrisk:.3f}", color='red', ha='center', va='top', fontsize=8,
-                     rotation=90, backgroundcolor='white')
+            # Optionally mark quantiles on boxplot axis as vertical lines as well
+            ax2 = plt.gca()
+            if q_risk is not None:
+                ax2.axvline(q_risk, color='red', linestyle='--', linewidth=2)
+                ax2.text(q_risk, 0.95, f"{q_risk:.3f}", color='red', ha='center', va='top', fontsize=8,
+                         rotation=90, backgroundcolor='white')
+            if q_highrisk is not None:
+                ax2.axvline(q_highrisk, color='red', linestyle='-', linewidth=1.5)
+                ax2.text(q_highrisk, 0.95, f"{q_highrisk:.3f}", color='red', ha='center', va='top', fontsize=8,
+                         rotation=90, backgroundcolor='white')
 
-        plt.setp(box['whiskers'], color='black')
-        plt.setp(box['caps'], color='black')
-        plt.setp(box['medians'], color='red')
-        plt.xlabel('Aggregated fitness score')
-        plt.title('Boxplot: aggregated data vs target')
-        plt.grid(axis='x', linestyle='--', alpha=0.25)
-        plt.tight_layout()
-        plt.show()
-  
+            plt.setp(box['whiskers'], color='black')
+            plt.setp(box['caps'], color='black')
+            plt.setp(box['medians'], color='red')
+            plt.xlabel('Aggregated fitness score')
+            plt.title('Boxplot: aggregated data vs target')
+            plt.grid(axis='x', linestyle='--', alpha=0.25)
+            plt.tight_layout()
+            plt.show()
+        """
   
     def __empirical_coverage(self, lo, hi, y):
         """Return fraction of y in [lo, hi] and boolean mask."""

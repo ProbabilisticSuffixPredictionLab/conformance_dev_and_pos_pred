@@ -6,29 +6,84 @@ from sklearn.metrics import roc_curve, roc_auc_score
 
 class EvaluationMetrics:    
     def __init__(self, target_alignments: Optional[Dict]=None, predicted_alignments: Optional[Dict] = None):
-        # list of target alignments per case
+        # list of moves per prefix length
         self.target_alignments = target_alignments
-        # list of 1000 sampled alignments per case
+        # lists of 1000 lists containing tuples of moves
         self.pred_alignments = predicted_alignments
 
-    def _get_log_moves(alignment: list):
-        pass
-    
-    def _get_model_moves(alignment: list):
-        pass
-    
-    def get_deviations_per_case():
-        pass
+    def _get_log_moves(self, alignment: list): 
+        """
+        Alignment is list of tuples: Moves of type (move, '>>')
+        """
+        return [move for move in alignment if type(move[0]) == str and move[1] == '>>']
 
-    def precision_deviation(self):
+    def _get_model_moves(self, alignment: list):
         """
-        Calculates the precision of the deviation prediction.
+        Alignment is list of tuples: Move of type ('>>', move)
         """
-        
-    def recall_deviation(self):
+        return [move for move in alignment if move[0] == '>>' and type(move[1]) == str]
+
+    def precision_recall_deviations(self):
         """
-        Caluclates the recall of the deivation prediction.
+        Calculates both precision and recall of the deviation prediction.
         """
+        precision_results = {}
+        recall_results = {}
+
+        for target_align, pred_samples_align in zip(self.target_alignments, self.pred_alignments):
+            # Create sets for target log and model moves (no duplicates)
+            target_log_moves = set(self._get_log_moves(target_align))
+            target_model_moves = set(self._get_model_moves(target_align))
+            target_all_moves = target_log_moves | target_model_moves
+
+            # Create sets for predicted log and model moves with relative frequencies
+            pred_log_moves = {}
+            pred_model_moves = {}
+
+            for sample_alignment in pred_samples_align:
+                for move in self._get_log_moves(sample_alignment):
+                    pred_log_moves[move] = pred_log_moves.get(move, 0) + 1
+                for move in self._get_model_moves(sample_alignment):
+                    pred_model_moves[move] = pred_model_moves.get(move, 0) + 1
+
+            # Convert counts to relative frequencies
+            pred_log_moves = {(move, count / len(pred_samples_align)) for move, count in pred_log_moves.items()}
+            pred_model_moves = {(move, count / len(pred_samples_align)) for move, count in pred_model_moves.items()}
+            predicted_all_moves = pred_log_moves | pred_model_moves
+
+            # Calculate precision and recall for individual deviations
+            for move in target_all_moves:
+                if move not in recall_results:
+                    recall_results[move] = {'tp': 0, 'fn': 0}
+                if move not in precision_results:
+                    precision_results[move] = {'tp': 0, 'fp': 0}
+
+            for move, prob in predicted_all_moves:
+                if move not in precision_results:
+                    precision_results[move] = {'tp': 0, 'fp': 0}
+                if move in target_all_moves:
+                    precision_results[move]['tp'] += prob
+                    recall_results[move]['tp'] += prob
+                else:
+                    precision_results[move]['fp'] += prob
+
+            # Any target move not predicted (or partially predicted)
+            for move in target_all_moves:
+                prob_pred = sum(prob for m, prob in predicted_all_moves if m == move)
+                recall_results[move]['fn'] += max(0, 1 - prob_pred)
+
+        # Compute overall precision
+        total_tp_precision = sum(result['tp'] for result in precision_results.values())
+        total_fp = sum(result['fp'] for result in precision_results.values())
+        overall_precision = total_tp_precision / (total_tp_precision + total_fp) if (total_tp_precision + total_fp) > 0 else 0
+
+        # Compute overall recall
+        total_tp_recall = sum(r['tp'] for r in recall_results.values())
+        total_fn = sum(r['fn'] for r in recall_results.values())
+        overall_recall = total_tp_recall / (total_tp_recall + total_fn) if (total_tp_recall + total_fn) > 0 else 0
+
+        return overall_precision, precision_results, overall_recall, recall_results
+
         
     
     
