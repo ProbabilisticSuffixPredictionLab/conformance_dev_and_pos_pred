@@ -1,240 +1,150 @@
+import random
 import numpy as np
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List
+import pandas as pd
 
-from conformal_analysis.conformal_model import DataFrameConstruction, LogisticRegressionModel
-
-
-"""
-
-class ConformalGrouping:
-    def __init__(self, test_conformance_prediction: Dict[str, List[Any]], conformal_thresholds: Dict[str, Any]):
-        # list of conformance checking evaluated test cases: contains case_id, target_conformance, ml_conformance, samples_conformance
-        self.test_conformance_prediction = test_conformance_prediction
-
-        # Keep the same keys as before; will raise KeyError if missing (same behaviour as original)
-        self.agg_method: str = conformal_thresholds['agg_method']
-
-        # Empirical quantile thresholds
-        self.q_risk: float = float(conformal_thresholds['q_risk'])
-        self.q_highrisk: float = float(conformal_thresholds['q_highrisk'])
-
-        # Conformal bound out of conformal prediction to get intervals around empirical quantiles to ensure coverage
-        self.conformal_bound: float = float(conformal_thresholds['conformal_bound'])
-        
-        # Conformal risk control threshold
-        self.crc_thresh: float = float(conformal_thresholds['crc_threshold_risk']['t_hat'])
-
-    def __aggregate_samples_fitness(self, samples_fitness: Sequence[float], aggregation: str) -> float:
-        
-        arr = np.asarray(samples_fitness, dtype=float)  # safe conversion from list -> ndarray
-        if arr.size == 0:
-            raise ValueError("samples_fitness must not be empty")
-
-        if aggregation == 'mean':
-            agg = float(np.mean(arr))
-        elif aggregation == 'median':
-            agg = float(np.median(arr))
-        elif aggregation == 'min':
-            agg = float(np.min(arr))
-        elif aggregation == 'max':
-            agg = float(np.max(arr))
-        else:
-            raise ValueError(f"Unsupported aggregation: {aggregation}")
-
-        return agg
-
-    def _append_case(self, dst: Dict[str, List[Any]], case_id: Any, tgt_conf: Any, ml_conf: Any, smpl_conf: Any) -> None:
-        
-        dst['case_id'].append(case_id)
-        dst['target_conformance'].append(tgt_conf)
-        dst['ml_conformance'].append(ml_conf)
-        dst['samples_conformance'].append(smpl_conf)
-
-    def group_samples_conformance(self, method: str) -> Dict[str, Dict[str, List[Any]]]:
-        
-        # Sets to store the results:
-        save_set = {'case_id': [], 'target_conformance': [], 'ml_conformance': [], 'samples_conformance': []}
-        risk_set = {'case_id': [], 'target_conformance': [], 'ml_conformance': [], 'samples_conformance': []}
-        highrisk_set = {'case_id': [], 'target_conformance': [], 'ml_conformance': [], 'samples_conformance': []}
-
-        # Test set conformance results (assume lists exist as in original code)
-        case_ids = self.test_conformance_prediction['case_id']
-        target_confs = self.test_conformance_prediction['target_conformance']
-        ml_confs = self.test_conformance_prediction['ml_conformance']
-        smpl_confs = self.test_conformance_prediction['samples_conformance']
-
-        # 1) only empirical quantile
-        if method == 'emp':
-            for case_id, tgt_conf, ml_conf, smpl_conf in zip(case_ids, target_confs, ml_confs, smpl_confs):
-                
-                agg_smpl_fit = self.__aggregate_samples_fitness(samples_fitness=[smp['fitness'] for smp in smpl_conf],aggregation=self.agg_method)
-                
-                # [0, highrisk_thresh]
-                if agg_smpl_fit >= 0 and agg_smpl_fit <= self.q_highrisk:
-                    self._append_case(highrisk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                
-                # (highrisk_thresh, risk_thresh]
-                elif agg_smpl_fit > self.q_highrisk and agg_smpl_fit <= self.q_risk:
-                    self._append_case(risk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                
-                # (risk_thresh, 1]
-                else:
-                    self._append_case(save_set, case_id, tgt_conf, ml_conf, smpl_conf)
-
-        # 2) conformal intervals: empirical quantile +- conformal bound
-        elif method == 'conf':
-            for case_id, tgt_conf, ml_conf, smpl_conf in zip(case_ids, target_confs, ml_confs, smpl_confs):
-                
-                agg_smpl_fit = self.__aggregate_samples_fitness(samples_fitness=[smp['fitness'] for smp in smpl_conf],aggregation=self.agg_method)
-
-                agg_smpl_fit_lower = agg_smpl_fit - self.conformal_bound
-                agg_smpl_fit_upper = agg_smpl_fit + self.conformal_bound
-
-                # High risk set: If upper bound is smaller equal high risk threshold -> high risk set
-                if agg_smpl_fit_upper <= self.q_highrisk:
-                    self._append_case(highrisk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-
-                # High risk and risk set:
-                elif agg_smpl_fit_upper <= self.q_risk and agg_smpl_fit_lower <= self.q_highrisk:
-                    # self._append_case(highrisk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                    # self._append_case(risk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                    pass
-
-                # Risk set:
-                elif agg_smpl_fit_lower > self.q_highrisk and agg_smpl_fit_upper <= self.q_risk:
-                    self._append_case(risk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-
-                # Risk and save set:
-                elif agg_smpl_fit_lower <= self.q_risk:
-                    # self._append_case(risk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                    # self._append_case(save_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                    pass
-                else:
-                    self._append_case(save_set, case_id, tgt_conf, ml_conf, smpl_conf)
-
-        # 3) conformal risk control threshold
-        elif method == 'crc':
-            for case_id, tgt_conf, ml_conf, smpl_conf in zip(case_ids, target_confs, ml_confs, smpl_confs):
-                
-                agg_smpl_fit = self.__aggregate_samples_fitness(samples_fitness=[smp['fitness'] for smp in smpl_conf],aggregation=self.agg_method)
-
-                if self.crc_thresh > self.q_highrisk:
-                    if agg_smpl_fit <= self.q_highrisk:
-                        self._append_case(highrisk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-
-                    elif agg_smpl_fit <= self.crc_thresh:
-                        self._append_case(risk_set, case_id, tgt_conf, ml_conf, smpl_conf)
-
-                    else:
-                        self._append_case(save_set, case_id, tgt_conf, ml_conf, smpl_conf)
-                # if crc_thresh > q_highrisk: original code did nothing; preserve that behaviour
-                else:
-                    raise ValueError("CRC does not work for that dataset and/or credentials!")
-
-        else:
-            raise ValueError("Method does not exist")
-
-        return save_set, risk_set, highrisk_set 
-"""
-
-class RiskControlledGrouping:
-    def __init__(self, test_conformance_prediction: Dict[str, List[Any]], logistic_regression_model: LogisticRegressionModel):
-        # list of conformance checking evaluated test cases: contains case_id, target_conformance, ml_conformance, samples_conformance
-        self.test_conformance_prediction = test_conformance_prediction
-        
-        # Logistic regression model to predict risk
-        self.logistic_regression_model = logistic_regression_model
-        
-
-    def group_risk_and_safe_set(self, risk_threshold: float) -> Dict[str, Dict[str, List[Any]]]:
-        # Sets to store the results:
-        risk_set = {'case_id': [], 'target_conformance': [], 'ml_conformance': [], 'samples_conformance': []}
-        safe_set = {'case_id': [], 'target_conformance': [], 'ml_conformance': [], 'samples_conformance': []}
-
-        # Test set conformance results (assume lists exist as in original code)
-        case_ids = self.test_conformance_prediction['case_id']
-        
-        target_confs = self.test_conformance_prediction['target_conformance']
-        # Get target fitnes: 
-        target_confs_fitness = [tgt['fitness'] for tgt in target_confs]
-        
-        ml_confs = self.test_conformance_prediction['ml_conformance']
-        # Get ml fitness:
-        ml_confs_fitness = [ml['fitness'] for ml in ml_confs]
-
-        smpl_confs = self.test_conformance_prediction['samples_conformance']
-        # Get samples fitness:
-        smpl_confs_fitness = [[smp['fitness'] for smp in smpls] for smpls in smpl_confs]
-
-        test_set_fitness_score_results = {
-            'target_fitness': target_confs_fitness,
-            'ml_fitness': ml_confs_fitness,
-            'samples_fitness': smpl_confs_fitness
-        }
-
-        # Extract features from ml_confs for logistic regression model
-        df_init = DataFrameConstruction(fitness_score_results=test_set_fitness_score_results)
-        
-        # Get feature vectors for logistic regression model
-        test_def = df_init.samples_to_dataframe(threshold=risk_threshold)
-        
-        self.logistic_regression_model.predict_with_threshold(sel.logistic_regression_model.crc_info.get("tau", 0.5))
-        
-
-        # Predict risk using the logistic regression model
-        predictions = self.logistic_regression_model.classifier.predict(feature_vectors)
-
-        for case_id, tgt_conf, ml_conf, smpl_conf, pred in zip(case_ids, target_confs, ml_confs, smpl_confs, predictions):
-            if pred == 1:  # Assuming '1' indicates risk
-                risk_set['case_id'].append(case_id)
-                risk_set['target_conformance'].append(tgt_conf)
-                risk_set['ml_conformance'].append(ml_conf)
-                risk_set['samples_conformance'].append(smpl_conf)
-            else:
-                safe_set['case_id'].append(case_id)
-                safe_set['target_conformance'].append(tgt_conf)
-                safe_set['ml_conformance'].append(ml_conf)
-                safe_set['samples_conformance'].append(smpl_conf)
-
-        return safe_set, risk_set
-
-
-
-
-
-
-
-
-
-
-class ConformalDeviationPrediction:
-    def __init__(self, test_conformance_prediction_group: Dict[str, List[Any]]):
-        # list of dicts containing: target case, alignment, fitness, cost
-        self.conformance_pred_group_target = [tgt for tgt in test_conformance_prediction_group['target_conformance']]
-        
+class PreProcessConformanceResults:
+    def __init__(self, conformance_results: Dict[str, List[Any]]):        
         # list of 1000 list of dicts containing: target case, alignment, fitness, cost
-        self.conformance_pred_group_samples = [[smpl for smpl in smpls] for smpls in test_conformance_prediction_group['samples_conformance']]
+        self.conformance_results = conformance_results
         
-    def get_target_alignments(self) -> List[Any]:
+    def pre_process_for_lr_model(self):
+        """
+        Returns the list of predicted fitness scores (list of lists) for smpls.
+        """
+        samples_fitness = [[smpl['fitness'] for smpl in smpls] for smpls in self.conformance_results['samples_conformance']]
+        
+        rows = []
+        for i, samples in enumerate(samples_fitness):
+            arr = np.asarray(samples, dtype=float)
+            if arr.size == 0:
+                raise ValueError(f"Empty sample array at index {i}.")
+            mean = float(arr.mean())
+            median = float(np.median(arr))
+            var = float(arr.var(ddof=0))
+            std = float(arr.std(ddof=0))
+            mn = float(arr.min())
+            mx = float(arr.max())
+            q25 = float(np.percentile(arr, 25))
+            q75 = float(np.percentile(arr, 75))
+            iqr = q75 - q25
+            cm2 = float(np.mean((arr - mean) ** 2))
+            cm3 = float(np.mean((arr - mean) ** 3))
+            cm4 = float(np.mean((arr - mean) ** 4))
+            skew = (cm3 / (cm2 ** 1.5)) if cm2 > 0 else 0.0
+            kurt = ((cm4 / (cm2 ** 2)) - 3.0) if cm2 > 0 else -3.0
+            rows.append([mean, var, std, skew, kurt, median, mn, mx, q25, q75, iqr])
+            # rows.append([mean, var, skew, kurt, median])
+
+        columns = ['mean','variance','std','skewness','kurtosis_excess','median','min','max','q25','q75','iqr']
+        # columns = ['mean','variance','skewness','kurtosis_excess','median']
+        df = pd.DataFrame(rows, columns=columns)
+        
+        return df
+
+class DeviationPrediction:
+    def __init__(self, pred_conf_set):
+        # list of dicts containing: target case, alignment, fitness, cost
+        self.pred_conf_set = pred_conf_set
+        
+    def __get_target_aligns_pref_suf(self) -> List[Any]:
         """
         Returns the list of target alignments.
         """
         
-        return [tgt['alignment'] for tgt in self.conformance_pred_group_target]
-    
-    def get_predicted_alignments_with_median_fitness(self) -> List[List[Any]]:
+        tgt_aligns = [tgt['alignment'] for tgt in self.pred_conf_set['target_conformance']]
+        tgt_prefs = [tgt['prefix'] for tgt in self.pred_conf_set['target_conformance']]
+        tgt_sufs = [tgt['target_suffix'] for tgt in self.pred_conf_set['target_conformance']]
+
+        return (tgt_aligns, tgt_prefs, tgt_sufs)
+
+    def __get_predicted__aggregated_aligns_pref_suf(self) -> List[List[Any]]:
         """
         Returns the list of predicted alignments (list of lists) for smpls with median fitness score.
         """
         
-        predicted_alignments = []
-        for smpls in self.conformance_pred_group_samples:
-            if smpls:
-                median_fitness = np.median([smpl['fitness'] for smpl in smpls])
-                median_alignments = [smpl['alignment'] for smpl in smpls if smpl['fitness'] == median_fitness]
-                predicted_alignments.append(median_alignments)
+        # Decide if this behavior is correct
+        
+        pred_aligns = []
+        pred_prefs = []
+        pred_sufs = []
+
+        for smpls in self.pred_conf_set["samples_conformance"]:
+            # Convert to list if it's a numpy array
+            if isinstance(smpls, np.ndarray):
+                smpls = smpls.tolist()
+
+            # Skip empty or None entries
+            if smpls is None or len(smpls) == 0:
+                continue
+
+            # Extract fitness values
+            fitness_values = np.array([smpl["fitness"] for smpl in smpls])
+            median_fitness = np.median(fitness_values)
+
+            # Find alignments with fitness closest to the median
+            abs_diff = np.abs(fitness_values - median_fitness)
+            min_diff = np.min(abs_diff)
+            
+            close_alignments = [smpl["alignment"] for smpl, diff in zip(smpls, abs_diff) if diff == min_diff]
+            close_prefixes = [smpl["prefix"] for smpl, diff in zip(smpls, abs_diff) if diff == min_diff]
+            close_suffixes = [smpl["sampled_suffix"] for smpl, diff in zip(smpls, abs_diff) if diff == min_diff]
+            
+            # Randomly choose one alignment (safe even if only one)
+            if len(close_alignments) > 0:
+                idx = random.randrange(len(close_alignments))
+                pred_aligns.append(close_alignments[idx])
+                pred_prefs.append(close_prefixes[idx])
+                pred_sufs.append(close_suffixes[idx])
             else:
-                predicted_alignments.append([])
-        return predicted_alignments
+                # Fallback: choose the alignment with smallest difference
+                best_idx = int(np.argmin(abs_diff))
+                pred_aligns.append(smpls[best_idx]["alignment"])
+                pred_prefs.append(smpls[best_idx]["prefix"])
+                pred_sufs.append(smpls[best_idx]["sample_suffix"])   
+
+        return pred_aligns, pred_prefs, pred_sufs
+    
+    ## Check this method again !!
+    def get_deviations(self):
+        results = []
+        
+        tgt_aligns, tgt_prefs, tgt_sufs = self.__get_target_aligns_pref_suf()
+        pred_aligns, pred_prefs, pred_sufs = self.__get_predicted__aggregated_aligns_pref_suf()
+        
+        # Clean the alignments by removing ('>>', None) entries
+        cleaned_tgt_alignments = [[cleaned_align for cleaned_align  in align if cleaned_align != ('>>', None)] for align in tgt_aligns]
+        cleaned_pred_alignments = [[cleaned_align for cleaned_align  in align if cleaned_align != ('>>', None)] for align in pred_aligns]
+        
+        for i, (t_prefix, p_prefix) in enumerate(zip(tgt_prefs, pred_prefs)):
+            # Check if prefixes match
+            if t_prefix != p_prefix:
+                raise ValueError(f"Prefix mismatch: target prefix {t_prefix} does not match predicted prefix {p_prefix}.")
+            
+            # Get cleaned aligned element:
+            cleaned_tgt_align = cleaned_tgt_alignments[i].copy()
+            cleaned_pred_align = cleaned_pred_alignments[i].copy()
+            
+            for j, p in enumerate(t_prefix):
+                if cleaned_tgt_align[j][0] == p or cleaned_tgt_align[j][1] == p:
+                    cleaned_tgt_align[j] = None
+                
+                if cleaned_pred_align[j][0] == p or cleaned_pred_align[j][1] == p:
+                     cleaned_pred_align[j] = None 
+                
+            cleaned_tgt_deviation = [align for align in cleaned_tgt_align if align != None and align[0] != align[1]]
+            cleaned_pred_deviation = [align for align in cleaned_pred_align if align != None and align[0] != align[1]]
+                    
+            result = {"prefix": t_prefix,
+                      "tgt_suffix": tgt_sufs[i],
+                      "pred_suffix": pred_sufs[i],
+                      "tgt_cleaned_aligns": cleaned_tgt_alignments[i],
+                      "pred_cleaned_aligns": cleaned_pred_alignments[i],
+                      "tgt_deviations": cleaned_tgt_deviation,
+                      "pred_deviations": cleaned_pred_deviation}
+            
+            results.append(result)   
+        
+        return results
 
 
