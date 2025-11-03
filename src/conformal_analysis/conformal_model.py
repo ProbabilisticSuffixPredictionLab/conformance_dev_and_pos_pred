@@ -12,16 +12,32 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.calibration import CalibratedClassifierCV
 
 class ConformalAnalysisModel:
-    def __init__(self, fitness_score_results: dict):
+    def __init__(self, conformance_results: dict):
         """
         fitness_score_results : dict: Dict of fitness score results: 
         - case_id: list of (case_name, prefix_length),
         - target_fitness: list of fitness scores of target, per case,
-        - ml_fitness: list of fitness score of most-likely, per case,
-        - samples_fitness: list of fitness scores of samples (T=1000), per case
-        """
-        self.fitness_score_results = fitness_score_results
+        - target_suffix_fitness,
         
+        - ml_fitness: list of fitness score of most-likely, per case,
+        - ml_suffix_fitness,
+        
+        - samples_fitness: list of fitness scores of samples (T=1000), per case
+        - samples_suffix_fitness
+        """
+        self.res_target_conf = conformance_results['target_conformance']
+        self.res_target_conf_fit = [res['fitness'] for res in self.res_target_conf]
+        self.res_target_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_target_conf]
+
+        self.res_ml_conf = conformance_results['ml_conformance']
+        self.res_ml_conf_fit =  [res['fitness'] for res in self.res_ml_conf]
+        self.res_ml_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_ml_conf]
+
+        self.res_smpl_conf = conformance_results['samples_conformance']
+        self.res_smpl_conf_fit = np.array([[r['fitness'] for r in res] for res in self.res_smpl_conf])
+        self.res_smpl_conf_suffix_fit = np.array([[r['suffix_fitness'] for r in res] for res in self.res_smpl_conf])
+        
+   
     def __aggregate_samples_fitness(self, samples_fitness: np.ndarray, aggregation: str) -> float:
         """
         Helper method to aggregate the samples using various moment metrics.
@@ -77,18 +93,19 @@ class ConformalAnalysisModel:
         
         # Extend the dict with high-risk if needed
         
-        # Target
-        target_fitness_scores = self.fitness_score_results['target_fitness']
+        # Target (suffix)
+        target_fitness_scores = self.res_target_conf_suffix_fit
         # Get thresholds
         thresholds_target = self.__value_at_quantiles(target_fitness_scores, alpha_risk)
             
-        # Most likely
-        ml_fitness_scores = self.fitness_score_results['ml_fitness']
+        # Most likely (suffix)
+        ml_fitness_scores = self.res_ml_conf_suffix_fit
         # Get thresholds
         thresholds_ml = self.__value_at_quantiles(ml_fitness_scores, alpha_risk)
             
         # Samples
-        sampled_fitness_scores = self.fitness_score_results['samples_fitness']
+        sampled_fitness_scores = self.res_smpl_conf_suffix_fit
+        
         # Aggreagate the fitness samples (per case): Add tuples (aggregated, std)
         aggragted_sampled_fitness_scores = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
         # Get thresholds
@@ -100,14 +117,26 @@ class ConformalAnalysisModel:
                 'most_likely': thresholds_ml,
                 'samples': thresholds_sampled}                
  
-   
 class DataFrameConstruction:
-    def __init__(self, fitness_score_results: dict):
-        self.fitness_score_results = fitness_score_results
+    def __init__(self, conformance_results: dict):
+        self.res_target_conf = conformance_results['target_conformance']
+        self.res_target_conf_fit = [res['fitness'] for res in self.res_target_conf]
+        self.res_target_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_target_conf]
 
+        self.res_ml_conf = conformance_results['ml_conformance']
+        self.res_ml_conf_fit =  [res['fitness'] for res in self.res_ml_conf]
+        self.res_ml_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_ml_conf]
+
+        self.res_smpl_conf = conformance_results['samples_conformance']
+        self.res_smpl_conf_fit = [[r['fitness'] for r in res] for res in self.res_smpl_conf]
+        self.res_smpl_conf_suffix_fit = [[r['suffix_fitness'] for r in res] for res in self.res_smpl_conf]
+        
+        
     def samples_to_dataframe(self, q_risk: float = 0.0, target_col: str = "y"):
-        targets = self.fitness_score_results['target_fitness']
-        predicted_samples = self.fitness_score_results['samples_fitness']
+        
+        targets = self.res_target_conf_suffix_fit
+        
+        predicted_samples = self.res_smpl_conf_suffix_fit
 
         if len(targets) != len(predicted_samples):
             raise ValueError("Length mismatch between targets and predicted_samples.")
@@ -137,7 +166,7 @@ class DataFrameConstruction:
         columns = ['mean','variance','std','skewness','kurtosis_excess','median','min','max','q25','q75','iqr']
         # columns = ['mean','variance','skewness','kurtosis_excess','median']
         df = pd.DataFrame(rows, columns=columns)
-        df[target_col] = [1 if t > q_risk else 0 for t in targets]
+        df[target_col] = [1 if t >= q_risk else 0 for t in targets]
         return df
 
 
@@ -270,16 +299,15 @@ class LogisticRegressionModel:
                                               alpha: float = 0.05,
                                               n_grid: int = 1000) -> Dict[str, Any]:
         """
-        Calibrate the prediction probability such that the
-        false positive rate (FPR) of risk (label == 0) is controlled.
-
-        FP_risk = pred == 0 and target == 1 (predicted as risk but actually safe).
+        Calibrate the prediction probability such that the:
+        - false negative rate (FNR) of safe (label == 1) is controlled  
+        -> Reduce the FNR on the safe class (pred == 0 && true == 1). Such that with a maximum of alpha true safe are predicted as risk.
         
         Perform grid search over lambda in [0,1] to find the largest threshold t = 1 - lambda
         
         Parameters:
         X_cal, y_cal : calibration dataset (not used in training or probability calibration)
-        alpha : max expected FPR (e.g. 0.05)
+        alpha : max expected FNR (e.g. 0.05)
         n_grid : size of lambda grid to search over [0,1]
         
         Returns:
@@ -331,7 +359,6 @@ class LogisticRegressionModel:
                          "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
                          "lambda": lambda_hat,
                          "threshold": t_hat}
-
         else:
             # if lambda_hat == lambda_max, then t_hat = 0.0 => always predict safe (label 1)
             # per paper: if set empty, set hat_lambda = lambda_max (most conservative)
@@ -366,7 +393,7 @@ class LogisticRegressionModel:
         t_hat = self.crc_info.get("threshold", None)
         
         labels = np.zeros_like(probs, dtype=int)
-        # when using hi threshold: label is 1 if prob >= t_hat -> safe (1), else risk (0)
+        # when using threshold: label is 1 if prob >= t_hat -> safe (1), else risk (0)
         labels[probs >= t_hat] = 1
         
         # Return labels and probabilities

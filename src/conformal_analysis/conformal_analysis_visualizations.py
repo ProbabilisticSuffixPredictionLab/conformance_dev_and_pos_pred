@@ -78,8 +78,7 @@ class ConformalAnalysisVisualizations:
         # aggregate samples
         smpls_fit = None
         if aggregation is not None:
-            smpls_fit = self.__aggregate_samples_fitness(samples_fitness=self.samples_fitness,
-                                                         aggregation=aggregation)
+            smpls_fit = self.__aggregate_samples_fitness(samples_fitness=self.samples_fitness, aggregation=aggregation)
 
         # handle target_fitness
         target_fit = None
