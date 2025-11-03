@@ -1,12 +1,14 @@
 from collections import Counter, defaultdict
-from typing import Iterable, Any, Callable, Dict, List, Optional, Tuple
-import math
-from sklearn.metrics import roc_auc_score
+from typing import Iterable, Dict, List, Tuple
+import numpy as np
+from sklearn.metrics import roc_auc_score, roc_curve, auc
+import matplotlib.pyplot as plt
 
-class Evaluation:
+class DeviationEvaluation:
     def __init__(self, deviation_results: Iterable[dict]):
         self.deviation_results = list(deviation_results)
-        
+    
+    # precision and recall per case -> for all predicted/ target deviation labels compute prec. and rec.  
     def precision_recall_macro_deviations(self,
                                           label_only: bool = True,
                                           label_index: int = 0,
@@ -95,139 +97,21 @@ class Evaluation:
 
         return precision, recall
     
-
-    def auc_roc_macro_deviations(self,
-                                 label_only: bool = True,
-                                 label_index: int = 0,
-                                 score_extractor: Optional[Callable[[dict], Dict[Any, float]]] = None,
-                                 labels: Optional[List[Any]] = None
-                                 ) -> Dict[str, Any]:
+    # Evaluation same as of Grohs/Rehse for comparison:
+    # - Dev/ No Dev: Macro Precision, Recall and ROC_AUC 
+        
+    def precision_recall_macro_by_label_dev(self) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
         """
-        Compute macro AUC-ROC (one-vs-rest) across classes.
+        Compute per-label precision and recall only for labels appearing in the target set,
+        then return macro-averages across those target labels.
 
-        Parameters
-        - score_extractor: function(case) -> dict {label: score_in_[0,1]}. If None, tries to find 'pred_proba' or 'pred_scores' in each case.
-        
-        The extractor should return a score for every label you want to evaluate (missing label -> 0.0).
-        
-        - labels: optional list of labels to evaluate; if None the labels are inferred from targets.
-
-        Returns a dict:
-        - "per_label_auc": {label: auc_or_nan, ...},
-        - "macro_auc": mean_of_valid_aucs_or_nan,
-        - "labels_evaluated": [...],
-        - "skipped_labels": [...],  # labels with undefined AUC (no positives or no negatives)
-        - "error": error_msg_if_any_or_None
-
-        """
-        if roc_auc_score is None:
-            return {"error": "sklearn.metrics.roc_auc_score not available in this environment."}
-        
-        tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
-        pred_deviations = [dr.get('pred_deviations', []) for dr in self.deviation_results]
-
-        # Infer labels from targets if not provided
-        if labels is None:
-            lbls = set()
-            for tgts_raw in tgt_deviations:
-                for t in tgts_raw:
-                    lbls.add(t)
-            labels = sorted(lbls)
-
-        # Build y_true matrix (cases x labels (all log and model moves present in the target)): 1 if label is in case, else 1 
-        y_true_per_label: Dict[Any, List[int]] = {lab: [] for lab in labels}
-        for tgts in tgt_deviations:
-            tgt_set = set(tgts)
-            for lab in labels:
-                y_true_per_label[lab].append(1 if lab in tgt_set else 0)
-
-
-
-        # default attempt: look for 'pred_proba' or 'pred_scores' in the case
-        score_extractor = {}
-        mapping = case.get("pred_proba") or case.get("pred_scores") or {}
-        # mapping might be dict or list of (label, score)
-        if isinstance(mapping, dict):
-            for lab in labels:
-                score_extractor[lab] = float(mapping.get(lab, 0.0))
-        else:
-            # try to interpret as iterable of pairs
-            for lab in labels:
-                score_extractor[lab] = 0.0
-            for pair in mapping:
-                # accept (label, score)
-                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                    lab = pair[0]
-                    score = pair[1]
-                    if lab in labels:
-                        score_extractor[lab] = float(score)
-
-
-
-
-
-        # Build y_score per label (list of floats per case)
-        y_score_per_label: Dict[Any, List[float]] = {lab: [] for lab in labels}
-        for case in self.deviation_results:
-            scores_dict = score_extractor(case) or {}
-            for lab in labels:
-                s = scores_dict.get(lab, 0.0)
-                # clamp/convert to float
-                try:
-                    s = float(s)
-                except Exception:
-                    s = 0.0
-                # ensure within [0,1] is recommended but not enforced here
-                y_score_per_label[lab].append(s)
-
-        per_label_auc: Dict[Any, float] = {}
-        skipped_labels: List[Any] = []
-        for lab in labels:
-            y_true = y_true_per_label[lab]
-            y_score = y_score_per_label[lab]
-            # If y_true is constant (all 0 or all 1), ROC AUC is undefined
-            if all(v == 0 for v in y_true) or all(v == 1 for v in y_true):
-                per_label_auc[lab] = float("nan")
-                skipped_labels.append(lab)
-                continue
-            try:
-                auc = roc_auc_score(y_true, y_score)
-            except Exception:
-                auc = float("nan")
-            per_label_auc[lab] = float(auc)
-
-        # Macro: mean of valid (non-nan) per-label AUCs
-        valid_aucs = [v for v in per_label_auc.values() if (not math.isnan(v))]
-        macro_auc = float(sum(valid_aucs) / len(valid_aucs)) if valid_aucs else float("nan")
-
-        return {"per_label_auc": per_label_auc,
-                "macro_auc": macro_auc,
-                "labels_evaluated": labels,
-                "skipped_labels": skipped_labels,
-                "error": None}
-        
-        
-    def precision_recall_macro_by_label(self,
-                                        zero_division: float = 1.0
-                                        ) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
-        """
-        Compute per-label precision and recall, then return macro-averages across labels.
-
-        Returns:
-        precision_macro (float): mean of per-label precisions
-        recall_macro    (float): mean of per-label recalls
-        precision_per_label (dict): label -> precision
-        recall_per_label    (dict): label -> recall
-        counts (dict): summary counts: {'TP_total': int, 'FP_total': int, 'FN_total': int}
-        Conventions:
-        - TP_label computed as sum_over_cases min(pred_count, tgt_count)
-        - If denom == 0 for precision/recall, return `zero_division` for that label.
+        - macro: Get precision and recall per label and take the mean over all.      
         """
         # collect per-case counters
         tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
         pred_deviations = [dr.get('pred_deviations', []) for dr in self.deviation_results]
 
-        # label-level accumulators
+        # label-level accumulators (across all cases)
         total_pred = defaultdict(int)  # total predicted counts per label across all cases
         total_tgt  = defaultdict(int)  # total target counts per label across all cases
         tp_label   = defaultdict(int)  # true positives per label (summed per-case min)
@@ -237,78 +121,54 @@ class Evaluation:
             p_ctr = Counter(pred_list)
             t_ctr = Counter(tgt_list)
             labels_union = set(p_ctr) | set(t_ctr)
+            
+            # Go thorugh the labels that occur in prediction and target per case
             for lbl in labels_union:
+                # list and count the occurence of all predicted labels
                 total_pred[lbl] += p_ctr.get(lbl, 0)
+                # list and count the occurence of all target labels
                 total_tgt[lbl]  += t_ctr.get(lbl, 0)
+                # list and count of true positives: in pred and in tgt 
                 tp_label[lbl]   += min(p_ctr.get(lbl, 0), t_ctr.get(lbl, 0))
 
-        # build per-label precision/recall
+        # Only evaluate labels that exist in the target set -> According to grohs: "...Such new alignments are ignored during evaluation as no ground truth data to assess against exists."
+        target_label_list = sorted(k for k, v in total_tgt.items() if v > 0)
+        
+        # Precision and Recall
         precision_per_label = {}
         recall_per_label = {}
-        label_list = sorted(set(list(total_pred.keys()) + list(total_tgt.keys())))
 
-        for lbl in label_list:
+        for lbl in target_label_list:
+            # Number: How many times label in pred and target of same case:
             tp = tp_label.get(lbl, 0)
-            pred_sum = total_pred.get(lbl, 0)
-            tgt_sum = total_tgt.get(lbl, 0)
+            # How many times in prediction in total: All true positive and false positive (predicted but not in target)
+            tp_fp = total_pred.get(lbl, 0) 
+            # How many times in target in total: All true positive and false negative (not predicted but in target)
+            tp_fn = total_tgt.get(lbl, 0) 
 
-            # precision: TP / (TP + FP)  where FP = pred_sum - TP
-            denom_prec = tp + (pred_sum - tp)  # which is pred_sum
-            if denom_prec == 0:
-                precision_per_label[lbl] = float(zero_division)
-            else:
-                precision_per_label[lbl] = tp / denom_prec
+            # precision: TP / (TP + FP): Since only target labels are counted: Fp > 1 for unseen label not possible.
+            precision_per_label[lbl] = tp / tp_fp
 
             # recall: TP / (TP + FN) where FN = tgt_sum - TP
-            denom_rec = tp + (tgt_sum - tp)  # which is tgt_sum
-            if denom_rec == 0:
-                recall_per_label[lbl] = float(zero_division)
-            else:
-                recall_per_label[lbl] = tp / denom_rec
+            if tp_fn == 0:
+                # Not predicted but in target -> tp = 0, fn > 0
+                recall_per_label[lbl] = 0
+            else: 
+                recall_per_label[lbl] = tp / tp_fn
 
-        # macro averages over labels
-        if label_list:
-            precision_macro = float(sum(precision_per_label[lbl] for lbl in label_list) / len(label_list))
-            recall_macro = float(sum(recall_per_label[lbl] for lbl in label_list) / len(label_list))
-        else:
-            # no labels at all -- fallback
-            precision_macro = float(zero_division)
-            recall_macro = float(zero_division)
-
-        # also return micro/global counts (useful diagnostics)
-        TP_total = sum(tp_label.values())
-        FP_total = sum(total_pred[lbl] - tp_label[lbl] for lbl in label_list)
-        FN_total = sum(total_tgt[lbl] - tp_label[lbl] for lbl in label_list)
-        micro_prec = float(TP_total / (TP_total + FP_total)) if (TP_total + FP_total) > 0 else float(zero_division)
-        micro_rec  = float(TP_total / (TP_total + FN_total)) if (TP_total + FN_total) > 0 else float(zero_division)
-
-        counts = {
-            'TP_total': int(TP_total),
-            'FP_total': int(FP_total),
-            'FN_total': int(FN_total),
-            'micro_precision': micro_prec,
-            'micro_recall': micro_rec
-        }
-
-        return precision_macro, recall_macro, precision_per_label, recall_per_label, counts
-    
-
-    def precision_recall_macro_no_deviations(self,
-                                            zero_division: float = 1.0
-                                            ) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
+        # macro averages over target labels only
+        precision_macro = np.mean(list(precision_per_label.values()))
+        recall_macro = np.mean(list(recall_per_label.values()))
+            
+        return precision_macro, recall_macro, precision_per_label, recall_per_label
+        
+    def precision_recall_macro_by_label_no_dev(self,
+                                               zero_division: float = 1.0) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
         """
         Compute per-label precision and recall for the *no-deviation* event (opposite).
         Positive event = label is NOT present in prediction and NOT present in target.
-        Returns:
-        precision_macro (float), recall_macro (float),
-        precision_per_label (dict), recall_per_label (dict),
-        counts (dict) with global TP/FP/FN and micro-precision/recall.
-        Conventions:
-        - We operate on presence/absence per case (binary), not counts.
-        - Per-label TP_label = sum_cases [not pred_has and not tgt_has].
-        - pred_positive_count = sum_cases [not pred_has]  (predicted no-deviation)
-        - true_positive_count = sum_cases [not tgt_has]  (actually no-deviation)
-        - If denominator == 0 for precision/recall, return `zero_division` for that label.
+        
+        - macro: Get precision and recall per label and take the mean over all.      
         """
         tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
         pred_deviations = [dr.get('pred_deviations', []) for dr in self.deviation_results]
@@ -317,23 +177,25 @@ class Evaluation:
         tp_no = defaultdict(int)         # true positives for "no-deviation" per label
         pred_no_count = defaultdict(int) # predicted no-deviation counts per label (pred_has == False)
         true_no_count = defaultdict(int) # true no-deviation counts per label (tgt_has == False)
+        
+        total_tgt  = defaultdict(int)  # total target counts per label across all cases
 
         # collect label universe (union of labels seen anywhere)
         label_universe = set()
         for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
             p_set = set(pred_list)
             t_set = set(tgt_list)
+            
             label_universe |= (p_set | t_set)
+            labels_union = (p_set | t_set)
+        
+            t_ctr = Counter(tgt_list)
 
-        # If there are no labels observed at all, return default values
-        if not label_universe:
-            precision_macro = float(zero_division)
-            recall_macro = float(zero_division)
-            return precision_macro, recall_macro, {}, {}, {
-                'TP_total': 0, 'FP_total': 0, 'FN_total': 0,
-                'micro_precision': float(zero_division), 'micro_recall': float(zero_division)
-            }
-
+            # Go thorugh the labels that occur in prediction and target per case
+            for lbl in labels_union:
+                # list and count the occurence of all target labels
+                total_tgt[lbl]  += t_ctr.get(lbl, 0)          
+        
         # iterate cases and update presence/absence counts per label
         for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
             p_set = set(pred_list)
@@ -351,11 +213,15 @@ class Evaluation:
                 # true positive for no-deviation:
                 if (not pred_has) and (not tgt_has):
                     tp_no[lbl] += 1
+                    
+        # Only evaluate labels that exist in the target set -> According to grohs: "...Such new alignments are ignored during evaluation as no ground truth data to assess against exists."
+        target_label_list = sorted(k for k, v in total_tgt.items() if v > 0)
 
         # compute per-label precision/recall (for no-deviation)
         precision_per_label = {}
         recall_per_label = {}
-        for lbl in sorted(label_universe):
+        
+        for lbl in sorted(target_label_list):
             tp = tp_no.get(lbl, 0)
             pred_pos = pred_no_count.get(lbl, 0)   # predicted no-deviation
             true_pos = true_no_count.get(lbl, 0)  # actual no-deviation
@@ -376,19 +242,127 @@ class Evaluation:
         precision_macro = float(sum(precision_per_label[lbl] for lbl in precision_per_label) / len(precision_per_label))
         recall_macro = float(sum(recall_per_label[lbl] for lbl in recall_per_label) / len(recall_per_label))
 
-        # micro/global counts
-        TP_total = sum(tp_no.values())
-        FP_total = sum(pred_no_count[lbl] - tp_no[lbl] for lbl in label_universe)   # predicted no-deviation but target had label
-        FN_total = sum(true_no_count[lbl] - tp_no[lbl] for lbl in label_universe)   # target no-deviation but pred had label
-        micro_prec = float(TP_total / (TP_total + FP_total)) if (TP_total + FP_total) > 0 else float(zero_division)
-        micro_rec  = float(TP_total / (TP_total + FN_total)) if (TP_total + FN_total) > 0 else float(zero_division)
+        return precision_macro, recall_macro, precision_per_label, recall_per_label
+    
+    def roc_auc_macro_by_label(self, plot: bool = True) -> Tuple[float, Dict[str, float]]:
+        """
+        Compute ROC AUC per-label for the *deviation* event (label present).
+        - Positive class = label IS present in target (tgt_has == True).
+        - Predicted score = 1.0 if label IS present in prediction (pred_has == True), else 0.0.
 
-        counts = {
-            'TP_total': int(TP_total),
-            'FP_total': int(FP_total),
-            'FN_total': int(FN_total),
-            'micro_precision': micro_prec,
-            'micro_recall': micro_rec
-        }
+        Returns:
+        (macro_auc, auc_per_label)
+        - macro_auc: mean AUC across labels with a valid AUC (labels with only one class in y_true are ignored).
+        - auc_per_label: dict mapping label -> AUC (float('nan') for labels with undefined AUC).
+        """
+        # gather lists (same structure as in your precision/recall method)
+        tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
+        pred_deviations = [dr.get('pred_deviations', []) for dr in self.deviation_results]
 
-        return precision_macro, recall_macro, precision_per_label, recall_per_label, counts
+        # build label universe and total_tgt to restrict evaluation to labels that appear in targets
+        label_universe = set()
+        total_tgt = defaultdict(int)
+        for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
+            p_set = set(pred_list)
+            t_set = set(tgt_list)
+            label_universe |= (p_set | t_set)
+            t_ctr = Counter(tgt_list)
+            for lbl in (p_set | t_set):
+                total_tgt[lbl] += t_ctr.get(lbl, 0)
+
+        # restrict to labels that exist in target (same rule you used for precision/recall)
+        target_label_list = sorted(k for k, v in total_tgt.items() if v > 0)
+
+        auc_per_label: Dict[str, float] = {}
+        valid_aucs = []
+
+        # for plotting / debugging: keep per-label arrays
+        per_label_y_true: Dict[str, np.ndarray] = {}
+        per_label_y_score: Dict[str, np.ndarray] = {}
+
+        # for each label build y_true and y_score across cases
+        for lbl in target_label_list:
+            y_true = []
+            y_score = []
+            for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
+                tgt_has = (lbl in tgt_list)   # True if label present in target for this case
+                pred_has = (lbl in pred_list) # True if label present in prediction for this case
+
+                # y_true: 1 if actual "deviation" (label present in target)
+                y_true.append(1 if tgt_has else 0)
+                # y_score: predicted probability/score for "deviation".
+                # binary prediction -> 1.0 for predicted dev, 0.0 otherwise
+                y_score.append(1.0 if pred_has else 0.0)
+
+            y_true_arr = np.array(y_true)
+            y_score_arr = np.array(y_score)
+
+            # store arrays for plotting
+            per_label_y_true[lbl] = y_true_arr
+            per_label_y_score[lbl] = y_score_arr
+
+            # If y_true contains only a single class, AUC is undefined
+            if np.unique(y_true_arr).size < 2:
+                auc_per_label[lbl] = float('nan')
+                continue
+
+            try:
+                auc = float(roc_auc_score(y_true_arr, y_score_arr))
+            except Exception:
+                # defensive: if something else goes wrong, mark as nan
+                auc = float('nan')
+
+            auc_per_label[lbl] = auc
+            if not np.isnan(auc):
+                valid_aucs.append(auc)
+
+        # macro: mean over labels with valid AUCs. If none valid, return nan.
+        macro_auc = float(np.mean(valid_aucs)) if valid_aucs else float('nan')
+
+        # plotting: pass full per-label dicts (method should accept these)
+        if plot and hasattr(self, "_{}_plot_roc_per_label".format("__") ) is False:
+            # if your plotting helper is named __plot_roc_per_label as before:
+            try:
+                self.__plot_roc_per_label(per_label_y_true=per_label_y_true, per_label_y_score=per_label_y_score)
+            except Exception:
+                # swallow plotting errors so metric computation is unaffected
+                pass
+
+        return macro_auc, auc_per_label
+
+    def __plot_roc_per_label(self, per_label_y_true: dict, per_label_y_score: dict, labels=None):
+        """
+        Plot ROC curves for multiple labels.
+        
+        Args:
+            per_label_y_true: dict[label] -> list of 0/1 target values per case
+            per_label_y_score: dict[label] -> list of predicted scores per case
+            labels: list of labels to plot (default: all in per_label_y_true)
+        """
+        if labels is None:
+            labels = sorted(per_label_y_true.keys())
+        
+        plt.figure(figsize=(10, 8))
+        
+        for lbl in labels:
+            y_true = np.array(per_label_y_true[lbl])
+            y_score = np.array(per_label_y_score[lbl])
+            
+            # Skip labels with no positive or no negative examples (ROC AUC undefined)
+            if y_true.sum() == 0 or y_true.sum() == len(y_true):
+                print(f"Skipping label {lbl}: ROC undefined (only one class present)")
+                continue
+            
+            fpr, tpr, thresholds = roc_curve(y_true, y_score)
+            roc_auc = auc(fpr, tpr)
+            plt.plot(fpr, tpr, lw=2, label=f"{lbl} (AUC = {roc_auc:.2f})")
+        
+        plt.plot([0, 1], [0, 1], color='navy', lw=1, linestyle='--')  # diagonal
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel("False Positive Rate", fontsize=12)
+        plt.ylabel("True Positive Rate", fontsize=12)
+        plt.title("ROC Curves per Label", fontsize=14)
+        plt.legend(loc="lower right")
+        plt.grid(True)
+        plt.show()

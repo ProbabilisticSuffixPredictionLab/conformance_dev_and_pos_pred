@@ -33,11 +33,13 @@ class ConformanceChecking():
         cf_target_cases = pm4py.conformance.conformance_diagnostics_alignments(df_target_case, pn, im, fm, multi_processing=False)
         
         # Get costs and fitness split for prefix
-        prefix_cost, suffix_cost, prefix_fitness, suffix_fitness = self.__get_prefix_suffix_fitness(bwc=cf_target_cases[0]['bwc'], cost=cf_target_cases[0]['cost'], prefix=prefix_activities, alignment=cf_target_cases[0]['alignment'])
+        prefix_alignments, suffix_alignments, prefix_cost, suffix_cost, prefix_fitness, suffix_fitness = self.__get_prefix_suffix_fitness(bwc=cf_target_cases[0]['bwc'], cost=cf_target_cases[0]['cost'], prefix=prefix_activities, alignment=cf_target_cases[0]['alignment'])
         
         target_case_alignment = {"prefix": prefix_activities,
                                  "target_suffix": suffix_activities,
                                  "alignment": cf_target_cases[0]['alignment'],
+                                 "prefix_alignment": prefix_alignments,
+                                 "suffix_alignment": suffix_alignments,
                                  "cost": cf_target_cases[0]['cost'],
                                  "prefix_cost": prefix_cost,
                                  "suffix_cost": suffix_cost,
@@ -53,11 +55,13 @@ class ConformanceChecking():
         cf_mostlikely_cases = pm4py.conformance.conformance_diagnostics_alignments(df_mostlikely_case, pn, im, fm, multi_processing=False)
         
         # Get costs and fitness split for prefix
-        prefix_cost, suffix_cost, prefix_fitness, suffix_fitness = self.__get_prefix_suffix_fitness(bwc=cf_mostlikely_cases[0]['bwc'], cost=cf_mostlikely_cases[0]['cost'], prefix=prefix_activities, alignment=cf_mostlikely_cases[0]['alignment'])
+        prefix_alignments, suffix_alignments, prefix_cost, suffix_cost, prefix_fitness, suffix_fitness = self.__get_prefix_suffix_fitness(bwc=cf_mostlikely_cases[0]['bwc'], cost=cf_mostlikely_cases[0]['cost'], prefix=prefix_activities, alignment=cf_mostlikely_cases[0]['alignment'])
         
         mostlikely_case_alignment = {"prefix": prefix_activities,
                                      "ml_suffix": mostlikely_suffix_activities,
                                      "alignment": cf_mostlikely_cases[0]['alignment'],
+                                     "prefix_alignment": prefix_alignments,
+                                     "suffix_alignment": suffix_alignments,
                                      "cost": cf_mostlikely_cases[0]['cost'],
                                      "prefix_cost": prefix_cost,
                                      "suffix_cost": suffix_cost,
@@ -72,15 +76,16 @@ class ConformanceChecking():
 
         cf_sampled_cases = pm4py.conformance.conformance_diagnostics_alignments(df_sampled_cases, pn, im, fm, multi_processing=False)
         
-        
         predicted_sample_case_alignment = []
         for i, cf_res in enumerate(cf_sampled_cases):
             # Get costs and fitness split for prefix
-            prefix_cost, suffix_cost, prefix_fitness, suffix_fitness = self.__get_prefix_suffix_fitness(bwc=cf_res['bwc'], cost=cf_res['cost'], prefix=prefix_activities, alignment=cf_res['alignment'])
+            prefix_alignments, suffix_alignments, prefix_cost, suffix_cost, prefix_fitness, suffix_fitness = self.__get_prefix_suffix_fitness(bwc=cf_res['bwc'], cost=cf_res['cost'], prefix=prefix_activities, alignment=cf_res['alignment'])
             
             predicted_sample_case_alignment.append({"prefix": prefix_activities,
                                                     "sampled_suffix": predicted_sampled_suffixes_activities[i],
                                                     "alignment": cf_res['alignment'],
+                                                    "prefix_alignment": prefix_alignments,
+                                                    "suffix_alignment": suffix_alignments,
                                                     "cost": cf_res['cost'],
                                                     "prefix_cost": prefix_cost,
                                                     "suffix_cost": suffix_cost,
@@ -119,7 +124,7 @@ class ConformanceChecking():
         # Suffix alignments
         suffix_alignments = alignment[prefix_end_index + 1:]
         
-        # prefix costs and
+        # prefix costs
         prefix_cost = 0
         for (a,b) in prefix_alignments:
             if (a == None and b == '>>') or (a == '>>' and b == None):
@@ -128,7 +133,7 @@ class ConformanceChecking():
                 continue
             else:
                 prefix_cost += 10000
-        # suffix costs:        
+        # suffix costs        
         suffix_cost = 0
         for (a,b) in suffix_alignments:
             if (a == None and b == '>>') or (a == '>>' and b == None):
@@ -141,10 +146,12 @@ class ConformanceChecking():
         if prefix_cost + suffix_cost != cost:
             raise ValueError("Cost mismatch.")
         
+        # prefix fitness
         prefix_fitness = round(1.0 - float(prefix_cost) / float(bwc), 2)
+        # suffix fitness
         suffix_fitness = round(1.0 - float(suffix_cost) / float(bwc), 2)
 
-        return prefix_cost, suffix_cost, prefix_fitness, suffix_fitness
+        return prefix_alignments, suffix_alignments, prefix_cost, suffix_cost, prefix_fitness, suffix_fitness
                 
     def __create_df(self, cases: list):            
         # Single, deterministic base timestamp
