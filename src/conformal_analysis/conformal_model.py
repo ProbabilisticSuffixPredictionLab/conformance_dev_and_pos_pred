@@ -10,34 +10,21 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.calibration import CalibratedClassifierCV
-
-class ConformalAnalysisModel:
+               
+class DataFrameConstruction:
     def __init__(self, conformance_results: dict):
-        """
-        fitness_score_results : dict: Dict of fitness score results: 
-        - case_id: list of (case_name, prefix_length),
-        - target_fitness: list of fitness scores of target, per case,
-        - target_suffix_fitness,
-        
-        - ml_fitness: list of fitness score of most-likely, per case,
-        - ml_suffix_fitness,
-        
-        - samples_fitness: list of fitness scores of samples (T=1000), per case
-        - samples_suffix_fitness
-        """
         self.res_target_conf = conformance_results['target_conformance']
-        self.res_target_conf_fit = [res['fitness'] for res in self.res_target_conf]
+        # self.res_target_conf_fit = [res['fitness'] for res in self.res_target_conf]
         self.res_target_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_target_conf]
 
         self.res_ml_conf = conformance_results['ml_conformance']
-        self.res_ml_conf_fit =  [res['fitness'] for res in self.res_ml_conf]
+        # self.res_ml_conf_fit =  [res['fitness'] for res in self.res_ml_conf]
         self.res_ml_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_ml_conf]
 
         self.res_smpl_conf = conformance_results['samples_conformance']
-        self.res_smpl_conf_fit = np.array([[r['fitness'] for r in res] for res in self.res_smpl_conf])
-        self.res_smpl_conf_suffix_fit = np.array([[r['suffix_fitness'] for r in res] for res in self.res_smpl_conf])
+        # self.res_smpl_conf_fit = [[r['fitness'] for r in res] for res in self.res_smpl_conf]
+        self.res_smpl_conf_suffix_fit = [[r['suffix_fitness'] for r in res] for res in self.res_smpl_conf]
         
-   
     def __aggregate_samples_fitness(self, samples_fitness: np.ndarray, aggregation: str) -> float:
         """
         Helper method to aggregate the samples using various moment metrics.
@@ -107,7 +94,7 @@ class ConformalAnalysisModel:
         sampled_fitness_scores = self.res_smpl_conf_suffix_fit
         
         # Aggreagate the fitness samples (per case): Add tuples (aggregated, std)
-        aggragted_sampled_fitness_scores = [self.__aggregate_samples_fitness(samples_fitness=smp, aggregation=aggregation) for smp in sampled_fitness_scores]
+        aggragted_sampled_fitness_scores = [self.__aggregate_samples_fitness(samples_fitness=np.array(smp), aggregation=aggregation) for smp in sampled_fitness_scores]
         # Get thresholds
         thresholds_sampled = self.__value_at_quantiles([agg_smp[0] for agg_smp in aggragted_sampled_fitness_scores], alpha_risk)
         mean_std_sampled = np.nanmean([agg_smp[1] for agg_smp in aggragted_sampled_fitness_scores])
@@ -115,33 +102,20 @@ class ConformalAnalysisModel:
             
         return {'target': thresholds_target,
                 'most_likely': thresholds_ml,
-                'samples': thresholds_sampled}                
- 
-class DataFrameConstruction:
-    def __init__(self, conformance_results: dict):
-        self.res_target_conf = conformance_results['target_conformance']
-        self.res_target_conf_fit = [res['fitness'] for res in self.res_target_conf]
-        self.res_target_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_target_conf]
-
-        self.res_ml_conf = conformance_results['ml_conformance']
-        self.res_ml_conf_fit =  [res['fitness'] for res in self.res_ml_conf]
-        self.res_ml_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_ml_conf]
-
-        self.res_smpl_conf = conformance_results['samples_conformance']
-        self.res_smpl_conf_fit = [[r['fitness'] for r in res] for res in self.res_smpl_conf]
-        self.res_smpl_conf_suffix_fit = [[r['suffix_fitness'] for r in res] for res in self.res_smpl_conf]
+                'samples': thresholds_sampled}
         
         
     def samples_to_dataframe(self, q_risk: float = 0.0, target_col: str = "y"):
-        
+        # Target suffix fitness scores
         targets = self.res_target_conf_suffix_fit
-        
+        # Predicted samples fitness scores
         predicted_samples = self.res_smpl_conf_suffix_fit
 
         if len(targets) != len(predicted_samples):
             raise ValueError("Length mismatch between targets and predicted_samples.")
 
         rows = []
+        # 1000 samples
         for i, samples in enumerate(predicted_samples):
             arr = np.asarray(samples, dtype=float)
             if arr.size == 0:
@@ -168,7 +142,6 @@ class DataFrameConstruction:
         df = pd.DataFrame(rows, columns=columns)
         df[target_col] = [1 if t >= q_risk else 0 for t in targets]
         return df
-
 
 class LogisticRegressionModel:
     def __init__(self, 

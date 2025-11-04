@@ -147,7 +147,11 @@ class DeviationEvaluation:
             tp_fn = total_tgt.get(lbl, 0) 
 
             # precision: TP / (TP + FP): Since only target labels are counted: Fp > 1 for unseen label not possible.
-            precision_per_label[lbl] = tp / tp_fp
+            if tp_fp == 0:
+                # Not predicted but in target -> tp = 0, fn > 0
+                precision_per_label[lbl] = 0
+            else:
+                precision_per_label[lbl] = tp / tp_fp
 
             # recall: TP / (TP + FN) where FN = tgt_sum - TP
             if tp_fn == 0:

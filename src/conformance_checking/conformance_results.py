@@ -69,6 +69,7 @@ class ConformanceResults:
         
         # Build task list: (case_name, prefix_length, values)
         tasks = []
+        
         for results in self.data:
             for (case_name, prefix_length), values in results.items():
                 tasks.append((case_name, prefix_length, values))
@@ -123,11 +124,10 @@ class ConformanceResults:
     def quick_fitness(self):
         conf_obj = self.conformance_object
         tasks = []
-        for results in self.data:
-            for (case_name, prefix_length), values in results.items():
-                # Call the conformance method for testing.
-                cfr = conf_obj.conformance_of_sampled_suffixes(log_name=self.log_name, result_values=values)
-                break
+        for (case_name, prefix_length), values in self.data.items():
+            # Call the conformance method for testing.
+            cfr = conf_obj.conformance_of_sampled_suffixes(log_name=self.log_name, result_values=values)
+            break
         if not tasks:
             return {'case_id': [], 'target_fitness': [], 'ml_fitness': [], 'samples_fitness': []}
         
