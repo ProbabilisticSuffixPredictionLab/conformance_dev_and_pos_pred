@@ -248,6 +248,146 @@ class LogisticRegressionModel:
         # numpy array: assume caller ensured correct column order
         return X
 
+    # CRC threshold calibration:
+    def calibrate_crc_threshold_false_positive(self,
+                                            X_cal: Union[pd.DataFrame, np.ndarray],
+                                            y_cal: Union[pd.Series, np.ndarray],
+                                            alpha: float = 0.05,
+                                            n_grid: int = 1000,
+                                            ) -> Dict[str, Any]:
+        """
+        Calibrate the prediction probability such that the:
+        false positive rate (FPR) of safe (== 1) is controlled:
+        -> Bound P(pred safe | true risk) <= alpha.
+        -> Most important to catch all risks, so control the conditional FPR_safe.
+        
+        Perform grid search over threshold in [0,1] to find the minimal threshold that
+        guarantees the adjusted empirical risk <= alpha (per paper, least conservative).
+        
+        Parameters:
+        X_cal, y_cal : calibration dataset (not used in training or probability calibration)
+        alpha : max expected FPR_safe (e.g. 0.05)
+        n_grid : size of threshold grid to search over [0,1]
+        """
+        if not self.trained:
+            raise RuntimeError("Model must be trained before CRC calibration.")
+        
+        # predicted probabilities: >= threshold safe (=1), < threshold risk (=0)
+        # probabilities for each calibration case (P(safe))
+        probs = np.asarray(self.predict_proba(X_cal)).ravel()
+        
+        # true targets
+        y = np.asarray(y_cal).ravel()
+        if len(probs) != len(y):
+            raise ValueError("Length mismatch between X_cal and y_cal")
+        # Filter to true risk samples for conditional risk control
+        risk_mask = (y == 0)
+        n_risk = np.sum(risk_mask)
+        
+        if n_risk == 0:
+            crc_entry = {"note": "No true risk samples in calibration data; using conservative threshold",
+                        "params": {"alpha": float(alpha), "n_cal": 0, "B": 1.0},
+                        "lambda": 1.0,
+                        "threshold": 1.0}
+            self.crc_info = crc_entry
+            return dict(self.crc_info)
+        
+        # Get all probabilities of cases that have true risk:
+        probs_risk = probs[risk_mask]
+        # n for conditional risk
+        n_cal = n_risk  
+        
+        # The max loss is 1.0: B as an upper bound on the loss.
+        B = 1.0
+        
+        # build threshold grid (lambda in paper): increasing from 0 to 1 (larger = more conservative, lower risk)
+        thresholds = np.linspace(0.0, 1.0, n_grid)
+        
+        # compute empirical average loss R_n(threshold) for each threshold (decreasing)
+        R_n = np.empty_like(thresholds, dtype=float)
+        for j, t in enumerate(thresholds):
+            # predict safe when prob >= t, and loss when y == 0 (false safe)
+            # since filtered to y==0, just count predicted safe
+            k_fpr_safe = np.sum(probs_risk >= t)
+            R_n[j] = k_fpr_safe / n_cal
+        
+        # paper adjusted quantity: (n/(n+1)) * R_n + B/(n+1)
+        adj = (n_cal / (n_cal + 1.0)) * R_n + (B / (n_cal + 1.0))
+        
+        # Pick the infimum lambda (smallest threshold) where adj <= alpha: this is the first index j where adj[j] <= alpha (least conservative satisfying the bound)
+        feasible_idx = np.where(adj <= alpha)[0]
+        if feasible_idx.size > 0:
+            j0 = int(feasible_idx[0])
+            lambda_hat = float(thresholds[j0])
+            # lambda is the threshold here
+            t_hat = lambda_hat  
+            crc_entry = {"note": None,
+                        "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
+                        "lambda": lambda_hat,
+                        "threshold": t_hat}
+        else:
+            # if no lambda satisfies, set lambda_hat = lambda_max (most conservative)
+            lambda_hat = float(thresholds[-1])
+            t_hat = lambda_hat
+            crc_entry = {"note": "no lambda satisfied inequality; using lambda_max per paper",
+                        "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
+                        "lambda": lambda_hat,
+                        "threshold": t_hat}
+        
+        self.crc_info = crc_entry
+        
+        return dict(self.crc_info)
+    
+    def calibrate_threshold_for_f1(self,
+                               X_cal: Union[pd.DataFrame, np.ndarray],
+                               y_cal: Union[pd.Series, np.ndarray],
+                               n_grid: int = 1000,
+                               pos_label: int = 1) -> Dict[str, Any]:
+        """
+        Calibrate the threshold to maximize the F1 score on the calibration set.
+        Assumes binary classification with classes 0 (risk) and 1 (safe).
+        Parameters:
+        X_cal, y_cal : calibration dataset
+        n_grid : size of threshold grid to search over [0,1]
+        pos_label : the positive class for F1 computation (default 1 for safe)
+        """
+        if not self.trained:
+            raise RuntimeError("Model must be trained before calibration.")
+        
+        # Probabilities for the safe class (assuming predict_proba returns P(safe))
+        probs = np.asarray(self.predict_proba(X_cal)).ravel()
+        y = np.asarray(y_cal).ravel()
+        if len(probs) != len(y):
+            raise ValueError("Length mismatch between X_cal and y_cal")
+        n_cal = len(y)
+        
+        # Build threshold grid
+        thresholds = np.linspace(0.0, 1.0, n_grid)
+        
+        # Compute F1 for each threshold
+        f1_scores = np.empty_like(thresholds, dtype=float)
+        for j, t in enumerate(thresholds):
+            preds = (probs >= t).astype(int)  # 1 if >= t (safe), 0 otherwise
+            if np.sum(preds == pos_label) == 0:  # Avoid division by zero
+                f1_scores[j] = 0.0
+            else:
+                precision = np.sum((preds == pos_label) & (y == pos_label)) / np.sum(preds == pos_label)
+                recall = np.sum((preds == pos_label) & (y == pos_label)) / np.sum(y == pos_label) if np.sum(y == pos_label) > 0 else 0.0
+                f1_scores[j] = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        # Pick the threshold with max F1
+        max_idx = np.argmax(f1_scores)
+        t_hat = float(thresholds[max_idx])
+        f1_hat = float(f1_scores[max_idx])
+        cal_entry = {"note": "Threshold selected to maximize empirical F1 on calibration set",
+                    "params": {"n_cal": int(n_cal), "pos_label": int(pos_label)},
+                    "threshold": t_hat,
+                    "f1_score": f1_hat}
+        
+        self.crc_info = cal_entry  # Or store in a new attribute
+        
+        return dict(self.crc_info)
+    
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained.")
@@ -264,88 +404,27 @@ class LogisticRegressionModel:
         proba = self.pipeline.predict_proba(X_in)
         # assume binary: [:,1] is P(y=1)
         return np.asarray(proba)[:, 1]
-
-    # CRC threshold calibration:
-    def calibrate_crc_marginal_false_positive(self,
-                                              X_cal: Union[pd.DataFrame, np.ndarray],
-                                              y_cal: Union[pd.Series, np.ndarray],
-                                              alpha: float = 0.05,
-                                              n_grid: int = 1000) -> Dict[str, Any]:
+    
+    def predict_without_threshold(self,
+                                  X: Union[pd.DataFrame, np.ndarray]
+                                 ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Calibrate the prediction probability such that the:
-        - false negative rate (FNR) of safe (label == 1) is controlled  
-        -> Reduce the FNR on the safe class (pred == 0 && true == 1). Such that with a maximum of alpha true safe are predicted as risk.
-        
-        Perform grid search over lambda in [0,1] to find the largest threshold t = 1 - lambda
-        
-        Parameters:
-        X_cal, y_cal : calibration dataset (not used in training or probability calibration)
-        alpha : max expected FNR (e.g. 0.05)
-        n_grid : size of lambda grid to search over [0,1]
-        
-        Returns:
-        dict: crc info stored in self.crc_info
+        Predict labels.
+        Returns labels (and optionally probabilities).
         """
-        
         if not self.trained:
-            raise RuntimeError("Model must be trained before CRC calibration.")
+            raise RuntimeError("Model not trained.")
 
-        # predicted probabilities -> >= 0.5 safe, <0.5 risk
-        probs = np.asarray(self.predict_proba(X_cal)).ravel()
-        # true targets
-        y = np.asarray(y_cal).ravel()
-        if len(probs) != len(y):
-            raise ValueError("Length mismatch between X_cal and y_cal")
-        # number of calibration samples
-        n_cal = len(y)
-
-        # The max FPR is 1.0: B as an upper bound on L_i.
-        B = 1.0
-
-        # build lambda grid in [0,1]. 1000 random probability values for safe set pred split: lambda increasing => loss non-increasing.
-        lambdas = np.linspace(0.0, 1.0, n_grid)
-        # map to threshold t = 1 - lambda
-        threshs = 1.0 - lambdas
-
-        # compute empirical average loss R_n(lambda) for each lambda (increasing)
-        R_n = np.empty_like(lambdas, dtype=float)
-        k_list = np.empty_like(lambdas, dtype=int)
-        for j, t in enumerate(threshs):
-            # pred risk when prob < tau, and loss when y == 1
-            mask_pred_risk = (probs < t)
-            k = int(np.sum(mask_pred_risk & (y == 1)))
-            k_list[j] = k
-            R_n[j] = k / n_cal
-        # paper adjusted quantity: (n/(n+1)) * R_n + B/(n+1)
-        adj = (n_cal / (n_cal + 1.0)) * R_n + (B / (n_cal + 1.0))
-
-        # Pick the smallest possible lambda -> the largest possible threshold that guarantess that adj <= alpha.
-        # this is the first index j where adj[j] <= alpha
-        feasible_idx = np.where(adj <= alpha)[0]
+        # Predicted probabilities: Calls the fitted pipeline and predict proabilities.
+        probs = self.predict_proba(X)
         
-        if feasible_idx.size > 0:
-            j0 = int(feasible_idx[0])
-            lambda_hat = float(lambdas[j0])
-            t_hat = float(threshs[j0])
-            
-            crc_entry = {"note": None,
-                         "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
-                         "lambda": lambda_hat,
-                         "threshold": t_hat}
-        else:
-            # if lambda_hat == lambda_max, then t_hat = 0.0 => always predict safe (label 1)
-            # per paper: if set empty, set hat_lambda = lambda_max (most conservative)
-            lambda_hat = float(lambdas[-1])
-            t_hat = float(threshs[-1])
-            
-            crc_entry = {"note": "no lambda satisfied inequality; using lambda_max per paper",
-                         "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
-                         "lambda": lambda_hat,
-                         "threshold": t_hat}
+        labels = np.zeros_like(probs, dtype=int)
+        # when using threshold: label is 1 if prob >= t_hat -> safe (1), else risk (0)
+        labels[probs >= 0.5] = 1
         
-        self.crc_info = crc_entry
+        # Return labels and probabilities
+        return (labels, probs)
         
-        return dict(self.crc_info)
 
     # Predict with CRC threshold
     def predict_with_threshold(self,
