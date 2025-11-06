@@ -210,4 +210,4 @@ pyrightconfig.json
 
 
 # Do not add data directory to git
-data/
+data/encoded_data

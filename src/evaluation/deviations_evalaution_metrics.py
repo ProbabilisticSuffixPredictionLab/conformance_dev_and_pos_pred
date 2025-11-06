@@ -9,11 +9,11 @@ class DeviationEvaluation:
         self.deviation_results = list(deviation_results)
     
     # precision and recall per case -> for all predicted/ target deviation labels compute prec. and rec.  
-    def precision_recall_macro_deviations(self,
-                                          label_only: bool = True,
-                                          label_index: int = 0,
-                                          zero_division: float = 1.0
-                                          ) -> float:
+    def precision_recall_case_based_deviations(self,
+                                               label_only: bool = True,
+                                               label_index: int = 0,
+                                               zero_division: float = 1.0
+                                               ) -> float:
         """
         Precision = TP / (TP + FP)
         - TP: Deviating predicted and deviating in target.
@@ -99,7 +99,6 @@ class DeviationEvaluation:
     
     # Evaluation same as of Grohs/Rehse for comparison:
     # - Dev/ No Dev: Macro Precision, Recall and ROC_AUC 
-        
     def precision_recall_macro_by_label_dev(self) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
         """
         Compute per-label precision and recall only for labels appearing in the target set,
@@ -370,3 +369,7 @@ class DeviationEvaluation:
         plt.legend(loc="lower right")
         plt.grid(True)
         plt.show()
+        
+    # - Micro would be to compute TP, FP, ... for all cases and all labels, so not per label but for all labels at once.
+    
+    # Sequence evaluation: Evaluate the place of occurence of deviation in suffix

@@ -99,7 +99,7 @@ class DeviationPrediction:
 
         return results
     
-    def get_probabilistic_deviations(self):
+    def get_probabilistic_deviations(self, acceptance_prob:float=0):
         """
         Like get_aggregated_deviations() but uses probabilistic predicted alignments/suffixes.
         Expects a helper that returns per-prefix lists of alignment variants and their probabilities:
@@ -148,7 +148,7 @@ class DeviationPrediction:
             # Count frequencies
             counter_devs = Counter(sample_devs) 
             all_devs_with_prob = [(k, v / total_samples) for k, v in counter_devs.items()]
-            pred_deviations = [k for (k,a) in all_devs_with_prob if a >= 0.50]
+            pred_deviations = [k for (k,a) in all_devs_with_prob if a >= acceptance_prob]
                 
             results.append({
                 "prefix": tgt_prefs[i],
