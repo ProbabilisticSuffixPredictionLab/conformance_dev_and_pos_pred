@@ -1,8 +1,9 @@
 import random
 import numpy as np
 from typing import Any, List
-import pandas as pd
 from collections import Counter
+from pathlib import Path
+import json
 
 class DeviationPrediction:
     def __init__(self, pred_conf_set):
@@ -99,7 +100,7 @@ class DeviationPrediction:
 
         return results
     
-    def get_probabilistic_deviations(self, acceptance_prob:float=0):
+    def get_probabilistic_deviations(self, deviation_thresholds:dict):
         """
         Like get_aggregated_deviations() but uses probabilistic predicted alignments/suffixes.
         Expects a helper that returns per-prefix lists of alignment variants and their probabilities:
@@ -148,7 +149,23 @@ class DeviationPrediction:
             # Count frequencies
             counter_devs = Counter(sample_devs) 
             all_devs_with_prob = [(k, v / total_samples) for k, v in counter_devs.items()]
-            pred_deviations = [k for (k,a) in all_devs_with_prob if a >= acceptance_prob]
+            
+            pred_deviations = []
+            for (k,p) in all_devs_with_prob:
+                # If deviation k has calibrated threshold:
+                if k in deviation_thresholds.keys():
+                    # If prob of k is >= the calibrated threshold add:
+                    if p >= deviation_thresholds[k]:
+                        pred_deviations.append(k)
+                    else:
+                        continue
+                # If k is not in the deviation label list -> unseen:
+                else:
+                    # Add the deviation if prob >= as the default prob:
+                    if p >= 0.5:
+                        pred_deviations.append(k)
+                    else:
+                        continue
                 
             results.append({
                 "prefix": tgt_prefs[i],
@@ -163,3 +180,13 @@ class DeviationPrediction:
                 "deviations_prob_per_case": all_devs_with_prob})
 
         return results
+    
+    def save(self, path, deviations):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 
+        payload = deviations
+        with path.open("w") as f:
+            json.dump(payload, f, indent=4)
+        return str(path)
+        

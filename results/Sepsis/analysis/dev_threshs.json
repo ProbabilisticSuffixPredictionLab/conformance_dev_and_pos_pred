@@ -1,0 +1,128 @@
+[
+    {
+        "key": [
+            ">>",
+            "Admission IC"
+        ],
+        "value": 0.26
+    },
+    {
+        "key": [
+            ">>",
+            "CRP"
+        ],
+        "value": 0.42
+    },
+    {
+        "key": [
+            ">>",
+            "ER Registration"
+        ],
+        "value": 0.92
+    },
+    {
+        "key": [
+            ">>",
+            "ER Sepsis Triage"
+        ],
+        "value": 0.01
+    },
+    {
+        "key": [
+            ">>",
+            "ER Triage"
+        ],
+        "value": 0.93
+    },
+    {
+        "key": [
+            ">>",
+            "Lactic Acid"
+        ],
+        "value": 0.46
+    },
+    {
+        "key": [
+            ">>",
+            "Leukocytes"
+        ],
+        "value": 0.55
+    },
+    {
+        "key": [
+            ">>",
+            "Release C"
+        ],
+        "value": 0.71
+    },
+    {
+        "key": [
+            "Admission IC",
+            ">>"
+        ],
+        "value": 0.03
+    },
+    {
+        "key": [
+            "Admission NC",
+            ">>"
+        ],
+        "value": 0.05
+    },
+    {
+        "key": [
+            "CRP",
+            ">>"
+        ],
+        "value": 0.56
+    },
+    {
+        "key": [
+            "ER Registration",
+            ">>"
+        ],
+        "value": 0.12
+    },
+    {
+        "key": [
+            "ER Sepsis Triage",
+            ">>"
+        ],
+        "value": 0.16
+    },
+    {
+        "key": [
+            "ER Triage",
+            ">>"
+        ],
+        "value": 0.08
+    },
+    {
+        "key": [
+            "IV Antibiotics",
+            ">>"
+        ],
+        "value": 0.3
+    },
+    {
+        "key": [
+            "IV Liquid",
+            ">>"
+        ],
+        "value": 0.35
+    },
+    {
+        "key": [
+            "LacticAcid",
+            ">>"
+        ],
+        "value": 0.34
+    },
+    {
+        "key": [
+            "Leucocytes",
+            ">>"
+        ],
+        "value": 0.73
+    }
+]
