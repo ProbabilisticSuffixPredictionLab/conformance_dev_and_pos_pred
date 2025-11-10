@@ -208,9 +208,9 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,jupyternotebooks
 
-
 # Do not add data directory to git
 data/encoded_data
+data/prob_suffix_pred_models
 
-results/Helpdesk
-results/Sepsis
+# Do not add the content of the results folder
+results/*
