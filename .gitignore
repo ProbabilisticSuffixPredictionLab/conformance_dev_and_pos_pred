@@ -211,3 +211,6 @@ pyrightconfig.json
 
 # Do not add data directory to git
 data/encoded_data
+
+results/Helpdesk
+results/Sepsis
