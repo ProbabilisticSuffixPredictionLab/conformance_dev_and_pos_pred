@@ -1,15 +1,10 @@
 import pickle
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Optional
 
 def load_results(path: str) -> None:
         """
         Load all .pkl files from the given directory into self.d_con_results.
         """
-        
-        # i = 0
-        
         results = []
         print(f"Looking for .pkl files in: {path}")
         print(f"Resolved absolute path: {Path(path).resolve()}")
@@ -23,9 +18,6 @@ def load_results(path: str) -> None:
                     results = data
                 else:
                     results.append(data)
-                # i = i+1
-                # if i == 1:
-                   # break
                 
         print("Loaded all conformal results!")
         return results 

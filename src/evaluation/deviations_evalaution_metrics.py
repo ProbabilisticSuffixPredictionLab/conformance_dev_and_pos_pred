@@ -1,8 +1,15 @@
+import ast
 from collections import Counter, defaultdict
-from typing import Iterable, Dict, List, Tuple
+from typing import Iterable, Dict, List, Tuple, Union
 import numpy as np
 from sklearn.metrics import roc_auc_score, roc_curve, auc
 import matplotlib.pyplot as plt
+import pickle
+from pathlib import Path
+
+def load_results(path: Union[str, Path]) -> dict:
+    with Path(path).open("rb") as f:
+        return pickle.load(f)
 
 class DeviationEvaluation:
     def __init__(self, deviation_results: Iterable[dict]):

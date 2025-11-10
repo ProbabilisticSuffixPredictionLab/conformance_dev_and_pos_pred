@@ -214,3 +214,4 @@ data/prob_suffix_pred_models
 
 # Do not add the content of the results folder
 results/*
+!results/**/README.md

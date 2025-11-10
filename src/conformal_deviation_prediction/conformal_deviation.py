@@ -1,9 +1,9 @@
 import random
 import numpy as np
-from typing import Any, List
+from typing import Any, List, Union
 from collections import Counter
 from pathlib import Path
-import json
+import pickle
 
 class DeviationPrediction:
     def __init__(self, pred_conf_set):
@@ -181,12 +181,11 @@ class DeviationPrediction:
 
         return results
     
-    def save(self, path, deviations):
+    # Use pickle
+    def save(self, path: Union[str, Path], deviations: dict):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # 
-        payload = deviations
-        with path.open("w") as f:
-            json.dump(payload, f, indent=4)
+        with path.open("wb") as f:
+            pickle.dump(deviations, f)
         return str(path)
         
