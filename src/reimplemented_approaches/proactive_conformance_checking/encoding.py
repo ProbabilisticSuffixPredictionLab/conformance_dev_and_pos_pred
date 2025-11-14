@@ -133,8 +133,7 @@ class PrefixEncoder:
                 "T": T,
                 "act_vocab": self.act_vocab,
                 "res_vocab": self.res_vocab,
-                "trace_features": ["prefix_len_norm", "elapsed_norm"]
-                }
+                "trace_features": ["prefix_len_norm", "elapsed_norm"]}
         
         return X_seq, X_flat, Y, mask, meta
 

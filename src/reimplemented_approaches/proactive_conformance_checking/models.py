@@ -4,9 +4,9 @@ from torch.nn.utils.rnn import pack_padded_sequence, PackedSequence
 
 class LSTM_collective_IDP(nn.Module):
     """
-    Unidirectional multi-layer LSTM for trace-level multi-label classification.
-    Processes padded sequences (N, T, A) using pack_padded_sequence.
-    Output: (N, L) probabilities for each deviation label.
+    IDP-collective LSTM:.
+    Prefxes (CIBE encoded) and padded sequences: N x T x P.
+    Output: N x K probabilities for each deviation label.
     """
     def __init__(self,
                  # Sizes inputs:
@@ -33,25 +33,24 @@ class LSTM_collective_IDP(nn.Module):
         self.embeddings_resources = nn.ModuleList([nn.Embedding(100, embedding_dim) for _ in range(num_resources)])
         self.embeddings_months = nn.ModuleList([nn.Embedding(100, embedding_dim) for _ in range(num_months)])
 
-        # embedding dim equal:
-        lstm_input_size_activity = num_activities * embedding_dim
-        lstm_input_size_resources = num_resources * embedding_dim
-        lstm_input_size_months = num_months * embedding_dim
-
         # LSTM per categorical attribute:
         # Activities
+        lstm_input_size_activity = num_activities * embedding_dim
         self.lstm_activity = nn.LSTM(input_size=lstm_input_size_activity,
                                      hidden_size=lstm_hidden)
         # Resources
+        lstm_input_size_resources = num_resources * embedding_dim
         self.lstm_resource = nn.LSTM(input_size=lstm_input_size_resources,
                                      hidden_size=lstm_hidden)
         # Month
+        lstm_input_size_months = num_months * embedding_dim
         self.lstm_month = nn.LSTM(input_size=lstm_input_size_months,
                                   hidden_size=lstm_hidden)
         
         # fully connected: feed forward: same for all attributes
         self.fc_lstm = nn.Linear(lstm_hidden, num_output_labels)
         
+        # fully connected: for trce attributes
         self.fc_trace = nn.Linear(num_trace_atts, num_output_labels)
         
         # Final processing
@@ -64,56 +63,50 @@ class LSTM_collective_IDP(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, 
-                x_acts: torch.Tensor,
-                x_res: torch.Tensor,
-                x_month: torch.Tensor,
-                x_trace_atts: torch.Tensor,
-                lengths: torch.Tensor) -> torch.Tensor:
+                prefixes: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            x: (N, T, A) LongTensor - integer indices per attribute
-            lengths: (N,) LongTensor - true sequence lengths
-
-        Returns:
-            probs: (N, L) FloatTensor - independent probability per label
-        """
-        N, T, A = x_acts.shape
         
-
-        # Embed and concatenate attributes
-        embedded = [self.embeddings[i](x_acts[:, :, i]) for i in range(A)]
-        x_emb = torch.cat(embedded, dim=-1)  # (N, T, A * embedding_dim)
-
-        # Pack padded sequences
-        lengths_sorted, idx_sort = torch.sort(lengths, descending=True)
-        x_sorted = x_emb.index_select(0, idx_sort)
-        packed = pack_padded_sequence(x_sorted, lengths_sorted.cpu(), batch_first=True, enforce_sorted=True)
-
+        add a prefix matrix:
+        seq_len x batch_size x input_features? : T x N x P
+        or 
+        batch_size x seq_len x input_features? : N x T x P
+        
+        Return:
+        batch x probabilties (for all deviations K): N x K
+        """
+        
+        x_acts, x_res, x_month, x_trace_atts = prefixes
+          
+        # Embed categorical event attributes
+        embedded_acts = self.embeddings_activity(x_acts)
+        embedded_res = self.embeddings_resources(x_res)
+        embedded_months = self.embeddings_months(x_month)
+        
         # LSTM forward pass
-        _, (hn, _) = self.lstm_activity(packed)  # hn: (num_layers, N_sorted, hidden)
-
-        # Extract last hidden state from each layer
-        h_layer = hn[-1]  # (N_sorted, hidden) - output of first layer
-
-
-        
+        _, (h_act, _), _ = self.lstm_activity(embedded_acts)
+        _, (h_res, _), _ = self.lstm_resource(embedded_res)
+        _, (h_month, _), _ = self.lstm_month(embedded_months)
+    
+        # Forward pass through fully connected:
+        h_fc_act = self.fc_lstm(h_act)
+        h_fc_res = self.fc_lstm(h_res)
+        h_fc_month = self.lstm_month(h_month)
+        # forward pass thorugh fully connected trace atts:
+        h_fc_trace = self.fc_trace(x_trace_atts)
+    
         # Concatenate all four
-        h_combined = torch.cat([h_layer1, h_layer2], dim=-1)  # (N_sorted, 2*hidden)
-        # Restore original order
-        _, idx_unsort = torch.sort(idx_sort)
-        h_combined = h_combined.index_select(0, idx_unsort)
-
-        # Classifier
-        # logits = self.fc(h_combined)
+        h_combined = torch.cat([h_fc_act, h_fc_res, h_fc_month, h_fc_trace], dim=-1)  # (N_sorted, 2*hidden)
         
+        # layer norm      
         logits = self.layer_norm(h_combined)
         
+        # ReLu
         logits = self.relu(logits)
         
+        # Dropout
         logits = self.dropout(logits)
         
-        probs = self.sigmoid(logits)  # (N, L)
-        
-        
-
+        # Sigmoid
+        probs = self.sigmoid(logits)
+    
         return probs

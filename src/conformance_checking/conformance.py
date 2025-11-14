@@ -106,7 +106,6 @@ class ConformanceChecking():
         # (a,b) is move
         for i, (a, b) in enumerate(alignment):
         # Only count moves where the log side (a) is a real event
-        # 
         # Check if it is log or model move then
             if a !=  None and a != '>>':
                 log_events_encountered.append(a)
@@ -157,10 +156,8 @@ class ConformanceChecking():
         # Single, deterministic base timestamp
         base_time = pd.Timestamp("2025-01-01 00:00:00")
                 
-        df = pd.DataFrame({
-                'case:concept:name': range(len(cases)),
-                'concept:name': cases
-            })
+        df = pd.DataFrame({'case:concept:name': range(len(cases)),
+                           'concept:name': cases})
                 
         df['case:concept:name'] = df['case:concept:name'].astype(str)
                 
