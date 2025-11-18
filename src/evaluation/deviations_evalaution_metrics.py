@@ -172,8 +172,7 @@ class DeviationEvaluation:
             
         return precision_macro, recall_macro, precision_per_label, recall_per_label
         
-    def precision_recall_macro_by_label_no_dev(self,
-                                               zero_division: float = 1.0) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
+    def precision_recall_macro_by_label_no_dev(self, zero_division: float = 1.0) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
         """
         Compute per-label precision and recall for the *no-deviation* event (opposite).
         Positive event = label is NOT present in prediction and NOT present in target.
@@ -377,6 +376,66 @@ class DeviationEvaluation:
         plt.grid(True)
         plt.show()
         
+    def plot_macro_roc_auc(self, figsize=(8, 6)):
+        pred_lists = [dr.get("pred_deviations", []) for dr in self.deviation_results]
+        tgt_lists = [dr.get("tgt_deviations", []) for dr in self.deviation_results]
+
+        total_tgt = defaultdict(int)
+        for tgt in tgt_lists:
+            for lbl in tgt:
+                total_tgt[lbl] += 1
+
+        label_names = sorted(k for k, v in total_tgt.items() if v > 0)
+        if not label_names:
+            return {"per_label_auc": [], "macro_auc": float("nan")}
+
+        label_to_idx = {lbl: idx for idx, lbl in enumerate(label_names)}
+        num_cases = len(tgt_lists)
+        num_labels = len(label_names)
+
+        y_true = [[0] * num_labels for _ in range(num_cases)]
+        y_scores = [[0] * num_labels for _ in range(num_cases)]
+
+        for row, (pred, tgt) in enumerate(zip(pred_lists, tgt_lists)):
+            for lbl in tgt:
+                if lbl in label_to_idx:
+                    y_true[row][label_to_idx[lbl]] = 1
+            for lbl in pred:
+                if lbl in label_to_idx:
+                    y_scores[row][label_to_idx[lbl]] = 1
+
+        per_label_auc = [float("nan")] * num_labels
+        plt.figure(figsize=figsize)
+        ax = plt.gca()
+
+        valid_indices = []
+        for idx, lbl in enumerate(label_names):
+            column_true = [case[idx] for case in y_true]
+            if len(set(column_true)) < 2:
+                continue
+            column_scores = [case[idx] for case in y_scores]
+            fpr, tpr, _ = roc_curve(column_true, column_scores)
+            roc_auc = auc(fpr, tpr)
+            per_label_auc[idx] = roc_auc
+            valid_indices.append(idx)
+            ax.plot(fpr, tpr, lw=1.5, label=f"{lbl} (AUC={roc_auc:.3f})")
+
+        ax.plot([0, 1], [0, 1], "k--", label="Chance")
+        ax.set_xlabel("False Positive Rate")
+        ax.set_ylabel("True Positive Rate")
+        ax.set_title("ROC Curves per Deviation Label")
+        ax.legend(loc="lower right", fontsize="small")
+        plt.show()
+
+        macro_auc = float(
+            sum(per_label_auc[i] for i in valid_indices) / len(valid_indices)
+        ) if valid_indices else float("nan")
+
+        return {"per_label_auc": per_label_auc, "macro_auc": macro_auc}
+    
     # - Micro would be to compute TP, FP, ... for all cases and all labels, so not per label but for all labels at once.
     
     # Sequence evaluation: Evaluate the place of occurence of deviation in suffix
+
+
+

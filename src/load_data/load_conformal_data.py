@@ -31,7 +31,7 @@ def load_conformance_results(path: str) -> dict:
     
     # Find and sort the relevant .pkl files by the part number
     file_paths = sorted(
-        Path(path).glob("conformance_calibration_part_*.pkl"),
+        Path(path).glob("conformance_res_*.pkl"),
         key=lambda p: int(p.stem.split('_')[-1])
     )
     print(f"Found {len(file_paths)} files")

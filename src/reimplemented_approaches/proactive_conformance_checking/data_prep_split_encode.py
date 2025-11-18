@@ -12,6 +12,10 @@ from imblearn.under_sampling import OneSidedSelection
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import TensorDataset
+try:
+    from torch.serialization import add_safe_globals
+except ImportError:
+    add_safe_globals = None
 
 class DeviationLabeling:
     """
@@ -101,9 +105,7 @@ class DeviationLabeling:
     def generate_individual_labels(self,
                                    trace_attr: List[str],
                                    max_prefix_cap: int = None,
-                                   conf_runs: int = 100, 
-                                   save_csv: bool = True,
-                                   path_labeled_data: str = "") -> Tuple[pd.DataFrame, List[dict], List[List[str]]]:
+                                   conf_runs: int = 100) -> Tuple[pd.DataFrame, List[dict], List[List[str]]]:
         """
         Run conformance and produce:
           - labeled_df: DataFrame with prefixes and binary columns for each dev type
@@ -354,8 +356,11 @@ class CleanDatasets:
         return self.train_undersmpl_df, self.test_df
                 
 class PrefixDataset(Dataset):
-    def __init__(self, df, activity_col, resource_col, month_col, trace_cols, y_cols):
-        self.df = df.reset_index(drop=True)
+    def __init__(self, df_train: pd.DataFrame, df_test: pd.DataFrame, activity_col: str, resource_col: str, month_col: str, trace_cols, y_cols: List[str]):
+        # datasets
+        self.df_train = df_train.reset_index(drop=True)
+        self.df_test = df_test.reset_index(drop=True)
+        # column values
         self.activity_col = activity_col
         self.resource_col = resource_col
         self.month_col = month_col
@@ -363,12 +368,18 @@ class PrefixDataset(Dataset):
         self.y_cols = y_cols
         self._tensor_dataset = None
 
-    def __len__(self):
-        return len(self.df)
+    def __len__(self, train: bool = True):
+        if train:
+            return len(self.df_train)
+        else:
+            return len(self.df_test)
 
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-
+    def __getitem__(self, idx, train: bool = True):
+        if train:
+            row = self.df_train.iloc[idx]
+        else:
+            row = self.df_test.iloc[idx]
+            
         x_act = torch.tensor(row[self.activity_col], dtype=torch.long)
         x_res = torch.tensor(row[self.resource_col], dtype=torch.long)
         x_month = torch.tensor(row[self.month_col], dtype=torch.long)
@@ -387,24 +398,25 @@ class PrefixDataset(Dataset):
 
         return x_act, x_res, x_month, trace_feats, y
 
-    def to_tensor_dataset(self, device=None):
+    def _to_tensor_dataset(self, df, device=None, cache_key=None):
         device = torch.device(device) if device is not None else torch.device("cpu")
-        if self._tensor_dataset is not None and device.type == "cpu":
-            return self._tensor_dataset
+        
+        # if cache_key is not None and device.type == "cpu" and cache_key in self._tensor_dataset:
+        #     return self._tensor_dataset[cache_key]
 
-        act_arr = np.asarray(self.df[self.activity_col].tolist(), dtype=np.int64)
-        res_arr = np.asarray(self.df[self.resource_col].tolist(), dtype=np.int64)
-        month_arr = np.asarray(self.df[self.month_col].tolist(), dtype=np.int64)
+        act_arr = np.asarray(df[self.activity_col].tolist(), dtype=np.int64)
+        res_arr = np.asarray(df[self.resource_col].tolist(), dtype=np.int64)
+        month_arr = np.asarray(df[self.month_col].tolist(), dtype=np.int64)
 
         if self.trace_cols:
-            trace_arr = self.df[self.trace_cols].to_numpy(dtype=np.int64, copy=True)
+            trace_arr = df[self.trace_cols].to_numpy(dtype=np.int64, copy=True)
         else:
-            trace_arr = np.zeros((len(self.df), 0), dtype=np.int64)
+            trace_arr = np.zeros((len(df), 0), dtype=np.int64)
 
         if self.y_cols:
-            y_arr = self.df[self.y_cols].to_numpy(dtype=np.int64, copy=True)
+            y_arr = df[self.y_cols].to_numpy(dtype=np.int64, copy=True)
         else:
-            y_arr = np.zeros((len(self.df), 0), dtype=np.int64)
+            y_arr = np.zeros((len(df), 0), dtype=np.int64)
 
         x_act = torch.tensor(act_arr, dtype=torch.long, device=device)
         x_res = torch.tensor(res_arr, dtype=torch.long, device=device)
@@ -414,9 +426,16 @@ class PrefixDataset(Dataset):
 
         dataset = TensorDataset(x_act, x_res, x_month, trace_tensor, y_tensor)
 
-        if device.type == "cpu":
-            self._tensor_dataset = dataset
+        # if cache_key is not None and device.type == "cpu":
+        #     self._tensor_dataset[cache_key] = dataset
+        
         return dataset
+    
+    def tensor_datset_encoding(self, device):
+        train_dataset = self._to_tensor_dataset(self.df_train, device)
+        test_dataset = self._to_tensor_dataset(self.df_test, device)
+        
+        return train_dataset, test_dataset
 
     @staticmethod
     def save_datasets(train_dataset, test_dataset, save_path: str):
@@ -434,7 +453,19 @@ class PrefixDataset(Dataset):
         train_path = os.path.join(save_path, "train_set.pkl")
         test_path = os.path.join(save_path, "test_set.pkl")
 
-        train_dataset = torch.load(train_path, map_location=map_location)
-        test_dataset = torch.load(test_path, map_location=map_location)
+        if add_safe_globals is not None:
+            add_safe_globals([TensorDataset])
+
+        def _torch_load(path):
+            load_kwargs = {}
+            if map_location is not None:
+                load_kwargs["map_location"] = map_location
+            try:
+                return torch.load(path, weights_only=False, **load_kwargs)
+            except TypeError:
+                return torch.load(path, **load_kwargs)
+
+        train_dataset = _torch_load(train_path)
+        test_dataset = _torch_load(test_path)
 
         return train_dataset, test_dataset
