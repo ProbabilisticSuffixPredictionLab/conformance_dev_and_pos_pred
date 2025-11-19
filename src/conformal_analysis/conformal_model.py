@@ -500,69 +500,19 @@ class LogisticRegressionModel:
             # lambda is the threshold here
             t_hat = lambda_hat  
             crc_entry = {"note": None,
-                        "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
-                        "lambda": lambda_hat,
-                        "threshold": t_hat}
+                         "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
+                         "lambda": lambda_hat,
+                         "threshold": t_hat}
         else:
             # if no lambda satisfies, set lambda_hat = lambda_max (most conservative)
             lambda_hat = float(thresholds[-1])
             t_hat = lambda_hat
             crc_entry = {"note": "no lambda satisfied inequality; using lambda_max per paper",
-                        "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
-                        "lambda": lambda_hat,
-                        "threshold": t_hat}
+                         "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
+                         "lambda": lambda_hat,
+                         "threshold": t_hat}
         
         self.crc_info = crc_entry
-        
-        return dict(self.crc_info)
-    
-    def calibrate_threshold_for_f1(self,
-                               X_cal: Union[pd.DataFrame, np.ndarray],
-                               y_cal: Union[pd.Series, np.ndarray],
-                               n_grid: int = 1000,
-                               pos_label: int = 1) -> Dict[str, Any]:
-        """
-        Calibrate the threshold to maximize the F1 score on the calibration set.
-        Assumes binary classification with classes 0 (risk) and 1 (safe).
-        Parameters:
-        X_cal, y_cal : calibration dataset
-        n_grid : size of threshold grid to search over [0,1]
-        pos_label : the positive class for F1 computation (default 1 for safe)
-        """
-        if not self.trained:
-            raise RuntimeError("Model must be trained before calibration.")
-        
-        # Probabilities for the safe class (assuming predict_proba returns P(safe))
-        probs = np.asarray(self.predict_proba(X_cal)).ravel()
-        y = np.asarray(y_cal).ravel()
-        if len(probs) != len(y):
-            raise ValueError("Length mismatch between X_cal and y_cal")
-        n_cal = len(y)
-        
-        # Build threshold grid
-        thresholds = np.linspace(0.0, 1.0, n_grid)
-        
-        # Compute F1 for each threshold
-        f1_scores = np.empty_like(thresholds, dtype=float)
-        for j, t in enumerate(thresholds):
-            preds = (probs >= t).astype(int)  # 1 if >= t (safe), 0 otherwise
-            if np.sum(preds == pos_label) == 0:  # Avoid division by zero
-                f1_scores[j] = 0.0
-            else:
-                precision = np.sum((preds == pos_label) & (y == pos_label)) / np.sum(preds == pos_label)
-                recall = np.sum((preds == pos_label) & (y == pos_label)) / np.sum(y == pos_label) if np.sum(y == pos_label) > 0 else 0.0
-                f1_scores[j] = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-        
-        # Pick the threshold with max F1
-        max_idx = np.argmax(f1_scores)
-        t_hat = float(thresholds[max_idx])
-        f1_hat = float(f1_scores[max_idx])
-        cal_entry = {"note": "Threshold selected to maximize empirical F1 on calibration set",
-                    "params": {"n_cal": int(n_cal), "pos_label": int(pos_label)},
-                    "threshold": t_hat,
-                    "f1_score": f1_hat}
-        
-        self.crc_info = cal_entry  # Or store in a new attribute
         
         return dict(self.crc_info)
     

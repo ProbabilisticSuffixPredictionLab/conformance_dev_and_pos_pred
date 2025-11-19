@@ -6,17 +6,20 @@ from pathlib import Path
 import json
 
 class DeviationPredictionCalibration:
+    """
+    Methods to calibrate the binary thrshold per label
+    """
     def __init__(self, risk_conformance_results):
         self.risk_conformance_results = risk_conformance_results
     
-    def __get_y(self):
+    def _get_y(self):
         # Get all tgt alignments
         tgt_aligns = [tgt['suffix_alignment'] for tgt in self.risk_conformance_results['target_conformance']]
         # Remove filler from target alignments
         cleaned_tgt_alignments = [[a for a in align if a != ('>>', None) and a != (None, '>>')] for align in tgt_aligns]
         tgt_deviations = [[(a, b) for (a, b) in align if a != b] for align in cleaned_tgt_alignments]
         
-        # Dynamically collect all unique labels (transitions) from the sequences
+        # Dynamically collect all unique labels (deviations) from the sequences
         all_labels = set()
         for seq in tgt_deviations:
             all_labels.update(seq)
@@ -24,22 +27,24 @@ class DeviationPredictionCalibration:
         # Convert to a sorted list for consistent ordering (optional, but good for reproducibility)
         labels = sorted(list(all_labels))
 
-        num_instances = len(tgt_deviations)
+        num_cases = len(tgt_deviations)
         num_labels = len(labels)
-        # Now create y_true as a binary matrix: rows = instances, columns = labels: 1 if the label (transition) appears at least once in the sequence, else 0
-        y_true = np.zeros((num_instances, num_labels), dtype=int)
+        # Now create y_true as a binary matrix: rows = instances, columns = labels: 1 if the label (deviation) appears at least once in the sequence, else 0
+        y_true = np.zeros((num_cases, num_labels), dtype=int)
 
+        # Iterate through the target deviations: tuple of devs per case
         for i, seq in enumerate(tgt_deviations):
-            seq_set = set(seq)  # Use set for O(1) lookups and to ignore duplicates
+            # make deviation sequence unique
+            seq_set = set(seq)
             for j, label in enumerate(labels):
                 if label in seq_set:
                     y_true[i, j] = 1
                     
         return labels, y_true
     
-    def get_threshold_data(self):
+    def _get_threshold_data(self):
         # Target data:
-        labels, y_true = self.__get_y()
+        labels, y_true = self._get_y()
         
         # number of cases:
         n = len(self.risk_conformance_results["samples_conformance"])
@@ -84,7 +89,7 @@ class DeviationPredictionCalibration:
     def find_optimal_thresholds(self, beta=1.0, per_label=True):
         # probs = np.array([[1.0, 1.0, 0.55, ...]])# Shape (N: cases, M: number of labels)
         # y_true = np.array([[1, 0, 1, ...]])      # Ground truths
-        probs, (labels, y_true) = self.get_threshold_data()
+        probs, (labels, y_true) = self._get_threshold_data()
         
         thresholds = {}
         if per_label:
@@ -93,7 +98,8 @@ class DeviationPredictionCalibration:
                 fbeta = (1 + beta**2) * (prec * rec) / ((beta**2 * prec) + rec + 1e-10)  # Avoid div by zero
                 best_idx = np.argmax(fbeta)
                 thresholds[labels[label]] = thresh[best_idx]
-        else:  # Global threshold via micro F-beta
+        # Global threshold via micro F-beta
+        else:  
             candidates = np.linspace(0.01, 0.99, 99)
             fbetas = []
             for t in candidates:

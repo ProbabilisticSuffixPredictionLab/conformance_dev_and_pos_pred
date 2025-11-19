@@ -1,12 +1,8 @@
 import os
 import numpy as np
 from typing import List, Dict, Optional, Any
-
-# Parallelizing
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
-
-# Call the conformance checking logic
 from conformance_checking.conformance import ConformanceChecking
 
 # Module-level globals populated by initializer

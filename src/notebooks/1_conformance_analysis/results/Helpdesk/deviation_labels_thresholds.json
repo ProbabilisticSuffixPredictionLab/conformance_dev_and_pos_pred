@@ -18,21 +18,21 @@
             "Require upgrade",
             ">>"
         ],
-        "value": 0.0
+        "value": 0.02
     },
     {
         "key": [
             "Resolve ticket",
             ">>"
         ],
-        "value": 0.24
+        "value": 0.17
     },
     {
         "key": [
             "Take in charge ticket",
             ">>"
         ],
-        "value": 0.15
+        "value": 0.13
     },
     {
         "key": [
