@@ -1,6 +1,6 @@
 import os
 from collections import defaultdict
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Any
 import pandas as pd
 import numpy as np
 from tqdm import trange
@@ -12,17 +12,10 @@ from imblearn.under_sampling import OneSidedSelection
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import TensorDataset
-try:
-    from torch.serialization import add_safe_globals
-except ImportError:
-    add_safe_globals = None
+from torch.serialization import add_safe_globals
+
 
 class DeviationLabeling:
-    """
-    Simplified deviation labeling:
-    - Builds prefix dataset (X) and targets (y = list of deviation types that will occur in the suffix).
-    - Saves .csv dataframe
-    """
     def __init__(self, log_name: str, path_event_log: str, path_process_model: str):
         self.log_name = log_name
         self.path_event_log = path_event_log
@@ -31,7 +24,7 @@ class DeviationLabeling:
     def _load_log_csv(self):
         df = pd.read_csv(self.path_event_log)
         if self.log_name == "Helpdesk":
-            # Rename for example important for helpdesk:
+            # Rename: for example important for helpdesk:
             rename = {
                 "CaseID": "case:concept:name",
                 "Activity": "concept:name",
@@ -62,7 +55,9 @@ class DeviationLabeling:
           - dev_pos_by_case: case -> list of (position_index, dev_type)
           - dev_types: set of all deviation types encountered
         """
+        # Position of deviation in suffix
         dev_pos_by_case: Dict[str, List[Tuple[int, str]]] = defaultdict(list)
+        # All deviations
         dev_types: Set[str] = set()
 
         # iterate through the alignments in each trace:
@@ -102,15 +97,41 @@ class DeviationLabeling:
                     
         return sorted(dev_types), dict(dev_pos_by_case), 
 
+    @staticmethod
+    def _drop_single_positive_labels(df: pd.DataFrame, dev_types: List[str]) -> Tuple[pd.DataFrame, List[str]]:
+        """
+        Remove y_<label> columns that contain at most a single positive example.
+        Returns the pruned DataFrame and the list of remaining deviation labels.
+        """
+        keep_dev_types = []
+        drop_cols = []
+        for dt in dev_types:
+            col = f"y_{dt}"
+            if col not in df.columns:
+                continue
+            if df[col].sum() <= 1:
+                drop_cols.append(col)
+            else:
+                keep_dev_types.append(dt)
+        df = df.drop(columns=drop_cols, errors="ignore")
+        return df, keep_dev_types
+
     def generate_individual_labels(self,
                                    trace_attr: List[str],
                                    max_prefix_cap: int = None,
-                                   conf_runs: int = 100) -> Tuple[pd.DataFrame, List[dict], List[List[str]]]:
+                                   conf_runs: int = 100,
+                                   label_strategy: str = "collective") -> Tuple[Any, Any]:
         """
-        Run conformance and produce:
-          - labeled_df: DataFrame with prefixes and binary columns for each dev type
+        Run conformance and produce labeled prefixes.
+        label_strategy:
+        - "collective": one DataFrame containing all deviation targets + single encoder dict.
+        - "separate":  dict[label] -> DataFrame (only that label's target), dict[label] -> encoder dict.
         """
+        if label_strategy not in {"collective", "separate"}:
+            raise ValueError("label_strategy must be 'collective' or 'separate'")
+        # Get dataframe and event log objects
         df_raw, ev_log = self._load_log_csv()
+        # Get petri net object out of the process model
         net, im, fm = self._pre_process_process_model()
 
         # Run 100 conformance alignment:
@@ -121,7 +142,7 @@ class DeviationLabeling:
             # Choose the smallest deviation set:
             if len(best_D[0]) == 0 or len(best_D[0]) >= len(deviations):
                 best_D = (deviations, dev_pos_by_case)
-
+        # D_LB with fewest deviations, positions in suffixes of deviations
         dev_types, dev_pos_by_case = best_D
         
         # Build prefixes and targets:
@@ -129,12 +150,26 @@ class DeviationLabeling:
         
         # vocabularies for activities/resources
         activities = df_sorted["concept:name"].fillna("NA").astype(str).unique().tolist()
-        resources  = df_sorted["org:resource"].fillna("NA").astype(str).unique().tolist()
         act2idx = {act: (i+1) for i, act in enumerate(sorted(activities))}   # 0 reserved for PAD
+        
+        resources  = df_sorted["org:resource"].fillna("NA").astype(str).unique().tolist()
         res2idx = {res: (i+1) for i, res in enumerate(sorted(resources))}
+        
+        months = df_sorted["time:timestamp"].apply(lambda x: f"{x.month}_{x.year}")
+        unique_months = sorted(months.unique())
+        month2idx = {month: (i+1) for i, month in enumerate(unique_months)}
         
         # case attribute encoders
         case_attr_list = trace_attr or []
+        
+        # Always include weekday_start and weekday_end
+        # week_days_mapping = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        # if "weekday_start" not in case_attr_list:
+        #     case_attr_list.append("weekday_start")
+        # if "weekday_end" not in case_attr_list:
+        #    case_attr_list.append("weekday_end")
+        
+        # initializes and fits LabelEncoder objects for each trace attribute
         case_attr_encoders: Dict[str, LabelEncoder] = {}
         for ca in case_attr_list:
             le = LabelEncoder()
@@ -144,7 +179,7 @@ class DeviationLabeling:
             le.fit(col)
             case_attr_encoders[ca] = le
             
-        # determine L_max (cap if requested)
+        # determine the maximum case length to pad the 
         case_lengths = df_sorted.groupby("case:concept:name").size().to_dict()
         L_max = max(case_lengths.values()) if len(case_lengths) > 0 else 0
         if max_prefix_cap is not None:
@@ -156,10 +191,24 @@ class DeviationLabeling:
             g = g.reset_index(drop=True)
             n = len(g)
 
-            # encode case attrs once per case
+            # Compute weekday_start and weekday_end for the entire trace
+            # first_ts = g.loc[0, "time:timestamp"]
+            # last_ts = g.loc[n-1, "time:timestamp"]
+            # weekday_start_val = week_days_mapping[first_ts.weekday()] if pd.notna(first_ts) else "NA"
+            # weekday_end_val = week_days_mapping[last_ts.weekday()] if pd.notna(last_ts) else "NA"
+
+            # encode additional trace attrs once per case
             encoded_case_attrs = {}
             for ca in case_attr_list:
+                
+                # if ca == "weekday_start":
+                #     raw = weekday_start_val
+                # elif ca == "weekday_end":
+                #     raw = weekday_end_val
+                # else:
+                
                 raw = g[ca].iloc[0] if ca in g.columns else "NA"
+                
                 raw = "NA" if pd.isna(raw) else raw
                 le = case_attr_encoders[ca]
                 try:
@@ -189,7 +238,8 @@ class DeviationLabeling:
                         if pd.isna(ts) or pd.isna(start_ts):
                             month_row[p-1] = 0
                         else:
-                            month_row[p-1] = int(ts.month)
+                            month_str = f"{ts.month}_{ts.year}" if pd.notna(ts) else "NA"
+                            month_row[p-1] = month2idx.get(month_str, 0)
                     else:
                         # PAD remains 0
                         pass
@@ -197,10 +247,6 @@ class DeviationLabeling:
                 # for prefixes build classes for suffix labels
                 devs_in_suffix = []
                 for pos, dt in dev_pos_by_case.get(cid, []):
-                    # When first activity produces log move:
-                    # if pos == 0 and i == 0:
-                    #    devs_in_suffix.append(dt) 
-                    # deviations and last possible model moves
                     if pos > i or (pos >= i and i == n - 1):
                         devs_in_suffix.append(dt)
 
@@ -221,23 +267,44 @@ class DeviationLabeling:
                 rows.append(base)
 
         df_flat = pd.DataFrame(rows)
-
-        # encoders: values to ids and vice-versa
-        encoders = {"activity_ids": act2idx,
-                    "resource_ids": res2idx,
-                    "trace_attr_encoders": case_attr_encoders,
-                    "deviations": dev_types,
-                    "L_max": L_max}
-
-        return df_flat, encoders
         
+        # according to paper: remove the deviations that occur only a single time.
+        df_flat, dev_types = self._drop_single_positive_labels(df_flat, dev_types)
+
+        base_encoders = {"activity_ids": act2idx,
+                         "resource_ids": res2idx,
+                         "month_ids": month2idx,
+                         "trace_attr_encoders": case_attr_encoders,
+                         "L_max": L_max}
+
+        if label_strategy == "collective":
+            encoders = {**base_encoders, "deviations": dev_types}
+            return df_flat, encoders
+
+        label_dfs: Dict[str, pd.DataFrame] = {}
+        label_encoders: Dict[str, Dict[str, Any]] = {}
+        dev_cols = [f"y_{dt}" for dt in dev_types]
+
+        for dt in dev_types:
+            y_col = f"y_{dt}"
+            if y_col not in df_flat.columns:
+                continue
+            df_label = df_flat.drop(columns=[col for col in dev_cols if col != y_col]).copy()
+            label_dfs[dt] = df_label
+            label_encoders[dt] = {**base_encoders, "deviations": [dt]}
+
+        return label_dfs, label_encoders
+        
+
 class TrainTestSplit:
-    def __init__(self, df_labled_deviations):
+    def __init__(self, 
+                 df_labled_deviations):
         self.df_labeled_deviations = df_labled_deviations
         
     def data_split(self,
                    seed: int = 42,
-                   train_frac: float = 2/3):
+                   train_frac: float = 2/3,
+                   val_frac: float = 0.0):
         
         cases = self.df_labeled_deviations["case_id"].unique()
         n_cases = len(cases)
@@ -248,16 +315,40 @@ class TrainTestSplit:
                                  size=int(n_cases * train_frac),
                                  replace=False)
 
+        # If val_frac > 0, split train_cases into train and val
+        if val_frac > 0:
+            n_train_cases = len(train_cases)
+            n_val = int(n_train_cases * val_frac)
+            # Shuffle train_cases
+            rng.shuffle(train_cases)
+            val_cases = train_cases[:n_val]
+            train_cases = train_cases[n_val:]
+        else:
+            val_cases = []
+
         # Build splits
         train_df = self.df_labeled_deviations[self.df_labeled_deviations["case_id"].isin(train_cases)]
-        test_df  = self.df_labeled_deviations[~self.df_labeled_deviations["case_id"].isin(train_cases)]
+        val_df = self.df_labeled_deviations[self.df_labeled_deviations["case_id"].isin(val_cases)] if len(val_cases) > 0 else pd.DataFrame()
+        test_df = self.df_labeled_deviations[~self.df_labeled_deviations["case_id"].isin(list(train_cases) + list(val_cases))]
         
-        return train_df, test_df
-    
+        return train_df, val_df, test_df
+
+
 class Undersampling:
-    def __init__(self, train_df, list_dynamic_cols):
+    def __init__(self,
+                 train_df: pd.DataFrame,
+                 list_dynamic_cols: List[str],
+                 strategy: str = "collective"):
+        """
+        strategy:
+        -"collective": run OSS per label but keep the union of sampled rows so every deviation type contributes equally to one shared dataset.
+        -"separate":  run OSS per label and return a dict[label] -> undersampled dataframe.
+        """
+        if strategy not in {"collective", "separate"}:
+            raise ValueError("strategy must be 'collective' or 'separate'")
         self.train_df = train_df
         self.list_dynamic_cols = list_dynamic_cols
+        self.strategy = strategy
 
     @staticmethod
     def _flat_list_cols(df: pd.DataFrame, cols: List[str]) -> Tuple[pd.DataFrame, Dict[str, List[str]]]:
@@ -286,7 +377,10 @@ class Undersampling:
 
     def one_sided_selection_undersampling(self):
         """
-        we undersample with respect to all columns that start with y_
+        Apply OSS according to the chosen strategy.
+        Returns:
+            - collective: (undersampled_df, no_true_class)
+            - separate: (dict[label] -> undersampled_df, no_true_class)
         """
         original_cols = self.train_df.columns.tolist()
         list_cols = self.list_dynamic_cols
@@ -295,7 +389,7 @@ class Undersampling:
         feature_cols = [col for col in train_df_flat.columns if not col.startswith('y_') and col != 'case_id']
         target_cols = [col for col in train_df_flat.columns if col.startswith('y_')]
 
-        resampled_indices = []
+        selected_by_label: Dict[str, Set[int]] = {}
         no_true_class = []
 
         for target_col in target_cols:
@@ -307,54 +401,35 @@ class Undersampling:
             X = train_df_flat[feature_cols].values
             oss = OneSidedSelection(sampling_strategy='auto', random_state=42)
             oss.fit_resample(X, y)
-            resampled_indices.append(set(oss.sample_indices_))
+            selected_by_label[target_col] = set(oss.sample_indices_)
 
-        if not resampled_indices:
+        if not selected_by_label:
             df_resampled = self.train_df.drop(columns=no_true_class, errors="ignore").copy()
             df_resampled = df_resampled[[c for c in original_cols if c in df_resampled.columns]]
+            
+            if self.strategy == "separate":
+                return {}, no_true_class
             return df_resampled, no_true_class
 
-        common_indices = sorted(set.intersection(*resampled_indices))
-        df_resampled_flat = train_df_flat.iloc[common_indices].reset_index(drop=True)
-        df_resampled_flat = df_resampled_flat.drop(columns=no_true_class, errors="ignore")
+        if self.strategy == "collective":
+            common_indices = sorted(set.union(*selected_by_label.values()))
+            df_resampled_flat = train_df_flat.iloc[common_indices].reset_index(drop=True)
+            df_resampled_flat = df_resampled_flat.drop(columns=no_true_class, errors="ignore")
+            df_restored = self._reflat_list_cols(df_resampled_flat, flattened_mapping, original_cols)
+            return df_restored, no_true_class
 
-        df_restored = self._reflat_list_cols(df_resampled_flat, flattened_mapping, original_cols)
-        
-        return df_restored, no_true_class
-    
-class CleanDatasets:
-    def __init__(self, train_undersmpl_df: pd.DataFrame, test_df: pd.DataFrame, undersmpl_removed_cols: List[str]):
-        self.train_undersmpl_df: pd.DataFrame = train_undersmpl_df
-        self.test_df: pd.DataFrame = test_df
-        self.undersmpl_removed_cols: List[str] = undersmpl_removed_cols
+        # separate strategy: build per-label undersampled frames
+        separate_dfs: Dict[str, pd.DataFrame] = {}
+        for target_col, idxs in selected_by_label.items():
+            label_flat = train_df_flat.iloc[sorted(idxs)].reset_index(drop=True)
+            # drop only labels with no positives; keep the current one
+            drop_cols = [c for c in no_true_class if c in label_flat.columns and c != target_col]
+            label_flat = label_flat.drop(columns=drop_cols, errors="ignore")
+            separate_dfs[target_col] = self._reflat_list_cols(label_flat, flattened_mapping, original_cols)
+
+        return separate_dfs, no_true_class
             
-    def clean(self):
-        # removed columns not used in undersampling
-        for rc in self.undersmpl_removed_cols:
-            if rc in self.train_undersmpl_df.columns:
-                self.train_undersmpl_df = self.train_undersmpl_df.drop(rc, axis=1)
-            if rc in self.test_df.columns:
-                self.test_df = self.test_df.drop(rc, axis=1)
-                
-        # Check column values
-        y_cols_train = [col for col in self.train_undersmpl_df.columns if col.startswith('y_')]
-        y_cols_test = [col for col in self.test_df.columns if col.startswith('y_')]
-            
-        assert y_cols_train == y_cols_test
-            
-        for y_col in y_cols_train:
-            y_col_values_train = self.train_undersmpl_df[y_col].tolist()
-            y_col_values_test = self.test_df[y_col].tolist()
-            # check if is true in the data
-            if (1 in y_col_values_train) and (1 in y_col_values_test):
-                continue
-            # remove form the data if only false
-            else:
-                self.train_undersmpl_df = self.train_undersmpl_df.drop(y_col, axis=1)
-                self.test_df = self.test_df.drop(y_col, axis=1)
-            
-        return self.train_undersmpl_df, self.test_df
-                
+                        
 class PrefixDataset(Dataset):
     def __init__(self, df_train: pd.DataFrame, df_test: pd.DataFrame, activity_col: str, resource_col: str, month_col: str, trace_cols, y_cols: List[str]):
         # datasets

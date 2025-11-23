@@ -211,6 +211,7 @@ pyrightconfig.json
 # Do not add data directory to git
 data/encoded_data
 data/prob_suffix_pred_models
+data/resulting_lists_leg
 
 # Do not add the content of the results folder
 results/*

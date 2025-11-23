@@ -150,6 +150,10 @@ class DeviationPrediction:
             counter_devs = Counter(sample_devs) 
             all_devs_with_prob = [(k, v / total_samples) for k, v in counter_devs.items()]
             
+            # why ????
+            
+            # design based on the calibrated probability of the conformal model analysis
+            
             pred_deviations = []
             for (k,p) in all_devs_with_prob:
                 # If deviation k has calibrated threshold:
