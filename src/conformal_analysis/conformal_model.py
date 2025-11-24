@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import joblib
+import math
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
@@ -337,17 +338,14 @@ class LogisticRegressionModel:
         self.feature_names: Optional[List[str]] = None
         self.trained = False
 
-        # CRC info stored after calibration
-        self.crc_info: Dict[str, Any] = {}
-        
+        # Calibration info using conformal prediction:
+        self.calibration_info: Dict[str, Any] = {}
+
         self.metadata: Dict[str, Any] = {}
 
-    def get_crc_info(self) -> Dict[str, Any]:
-        return dict(self.crc_info)
-
-    def get_crc_value(self) -> Optional[float]:
-        return self.crc_info.get("tau", None)
-
+    def get_calibration_info(self) -> Dict[str, Any]:
+        return dict(self.calibraiton)
+    
     def get_feature_names(self) -> Optional[List[str]]:
         return self.feature_names
 
@@ -426,95 +424,99 @@ class LogisticRegressionModel:
         # numpy array: assume caller ensured correct column order
         return X
 
-    # CRC threshold calibration:
-    def calibrate_crc_threshold_false_positive(self,
-                                            X_cal: Union[pd.DataFrame, np.ndarray],
-                                            y_cal: Union[pd.Series, np.ndarray],
-                                            alpha: float = 0.05,
-                                            n_grid: int = 1000,
-                                            ) -> Dict[str, Any]:
+
+    """
+    def calibrate_conformal_threshold(self,
+                                  X_cal: Union[np.ndarray, "pd.DataFrame"],
+                                  y_cal: Union[np.ndarray, "pd.Series"],
+                                  alpha: float = 0.05,
+                                  delta: float = 0.05,
+                                  n_grid: int = 100
+                                  ) -> Dict[str, Any]:
+        
+        # Conformal risk control calibration to ensure: P(Y=1 | p < lambda) <= alpha. p < lambda -> risk
+        # Finds lambda by grid search with a Hoeffding upper bound on the conditional risk.
+    
+        if not getattr(self, "trained", False):
+            raise RuntimeError("Model must be trained before calibration.")
+
+        # max value:
+        B = 0
+        
+        # probabilities
+        p = self.predict_proba(X_cal).ravel()
+        # target values
+        targets = np.asarray(y_cal).ravel()
+
+        if len(p) != len(targets):
+            raise RuntimeError("Calibration features and labels have different lengths.")
+
+        # grid of candidate lambdas: start with largest lambdas
+        lambdas = np.linspace(p.min(), p.max(), n_grid)[::-1]  # descending
+
+        t = B
+        for lam in lambdas:
+            # get a mask (True: if p < lambda)
+            mask = p < lam
+            # all trues
+            k = np.sum(mask)
+            if k == 0:
+                continue  # skip, no points below threshold
+            # number of Y=1 (safe) below threshold
+            s = np.sum(targets[mask] == 1)  
+            
+            emp_risk = s / k
+            
+            # Hoeffding one-sided upper bound
+            ub = emp_risk + math.sqrt(math.log(1.0 / delta) / (2.0 * k))
+            if ub <= alpha:
+                t = lam
+                break  # pick largest lambda satisfying the risk constraint
+
+        self.calibration_info = {
+            "note": "Conformal-style risk threshold (risk control via grid search)",
+            "alpha": float(alpha),
+            "threshold": float(t)
+        }
+        return dict(self.calibration_info)
+        
+    """
+    
+    def calibrate_conformal_threshold(self,
+                                  X_cal: Union[np.ndarray, "pd.DataFrame"],
+                                  y_cal: Union[np.ndarray, "pd.Series"],
+                                  alpha: float = 0.05,
+                                  ) -> Dict[str, Any]:
         """
-        Calibrate the prediction probability such that the:
-        false positive rate (FPR) of safe (== 1) is controlled:
-        -> Bound P(pred safe | true risk) <= alpha.
-        -> Most important to catch all risks, so control the conditional FPR_safe.
-        
-        Perform grid search over threshold in [0,1] to find the minimal threshold that
-        guarantees the adjusted empirical risk <= alpha (per paper, least conservative).
-        
-        Parameters:
-        X_cal, y_cal : calibration dataset (not used in training or probability calibration)
-        alpha : max expected FPR_safe (e.g. 0.05)
-        n_grid : size of threshold grid to search over [0,1]
+        Conformal prediciton
         """
-        if not self.trained:
-            raise RuntimeError("Model must be trained before CRC calibration.")
+        if not getattr(self, "trained", False):
+            raise RuntimeError("Model must be trained before calibration.")
         
-        # predicted probabilities: >= threshold safe (=1), < threshold risk (=0)
-        # probabilities for each calibration case (P(safe))
-        probs = np.asarray(self.predict_proba(X_cal)).ravel()
+        # probabilities
+        p = self.predict_proba(X_cal).ravel()
+        # target values
+        targets = np.asarray(y_cal).ravel()
+
+        if len(p) != len(targets):
+            raise RuntimeError("Calibration features and labels have different lengths.")
+    
+        residuals = []
+        for i, y in enumerate(targets):
+            if y == 1:
+                residuals.append(1-p[i])
+            if y == 0:
+                residuals.append(p[i])
+                
+        quantile = np.quantile(np.array(sorted(residuals)), q=1-alpha)
+        t = 1-quantile
+            
+        self.calibration_info = {"note": "Conformal-style risk threshold (risk control via grid search)",
+                                 "alpha": float(alpha),
+                                 "threshold": float(t)}
         
-        # true targets
-        y = np.asarray(y_cal).ravel()
-        if len(probs) != len(y):
-            raise ValueError("Length mismatch between X_cal and y_cal")
-        # Filter to true risk samples for conditional risk control
-        risk_mask = (y == 0)
-        n_risk = np.sum(risk_mask)
-        
-        if n_risk == 0:
-            crc_entry = {"note": "No true risk samples in calibration data; using conservative threshold",
-                        "params": {"alpha": float(alpha), "n_cal": 0, "B": 1.0},
-                        "lambda": 1.0,
-                        "threshold": 1.0}
-            self.crc_info = crc_entry
-            return dict(self.crc_info)
-        
-        # Get all probabilities of cases that have true risk:
-        probs_risk = probs[risk_mask]
-        # n for conditional risk
-        n_cal = n_risk  
-        
-        # The max loss is 1.0: B as an upper bound on the loss.
-        B = 1.0
-        
-        # build threshold grid (lambda in paper): increasing from 0 to 1 (larger = more conservative, lower risk)
-        thresholds = np.linspace(0.0, 1.0, n_grid)
-        
-        # compute empirical average loss R_n(threshold) for each threshold (decreasing)
-        R_n = np.empty_like(thresholds, dtype=float)
-        for j, t in enumerate(thresholds):
-            # predict safe when prob >= t, and loss when y == 0 (false safe)
-            # since filtered to y==0, just count predicted safe
-            k_fpr_safe = np.sum(probs_risk >= t)
-            R_n[j] = k_fpr_safe / n_cal
-        
-        # paper adjusted quantity: (n/(n+1)) * R_n + B/(n+1)
-        adj = (n_cal / (n_cal + 1.0)) * R_n + (B / (n_cal + 1.0))
-        
-        # Pick the infimum lambda (smallest threshold) where adj <= alpha: this is the first index j where adj[j] <= alpha (least conservative satisfying the bound)
-        feasible_idx = np.where(adj <= alpha)[0]
-        if feasible_idx.size > 0:
-            j0 = int(feasible_idx[0])
-            lambda_hat = float(thresholds[j0])
-            # lambda is the threshold here
-            t_hat = lambda_hat  
-            crc_entry = {"note": None,
-                         "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
-                         "lambda": lambda_hat,
-                         "threshold": t_hat}
-        else:
-            # if no lambda satisfies, set lambda_hat = lambda_max (most conservative)
-            lambda_hat = float(thresholds[-1])
-            t_hat = lambda_hat
-            crc_entry = {"note": "no lambda satisfied inequality; using lambda_max per paper",
-                         "params": {"alpha": float(alpha), "n_cal": int(n_cal), "B": float(B)},
-                         "lambda": lambda_hat,
-                         "threshold": t_hat}
-        
-        self.crc_info = crc_entry
-        
-        return dict(self.crc_info)
+        return dict(self.calibration_info)
+
     
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         if not self.trained:
@@ -563,13 +565,14 @@ class LogisticRegressionModel:
         """
         if not self.trained:
             raise RuntimeError("Model not trained.")
-        if not self.crc_info:
-            raise RuntimeError("No CRC info found. Call calibrate_crc_marginal_false_positive first.")
+        
+        if not self.calibration_info:
+            raise RuntimeError("No calibraiton info found. Call calibrate_crc_marginal_false_positive first.")
 
         # Predicted probabilities: Calls the fitted pipeline and predict proabilities.
         probs = self.predict_proba(X)
         # CRC threshold
-        t_hat = self.crc_info.get("threshold", None)
+        t_hat = self.calibration_info.get("threshold", None)
         
         labels = np.zeros_like(probs, dtype=int)
         # when using threshold: label is 1 if prob >= t_hat -> safe (1), else risk (0)
@@ -591,8 +594,8 @@ class LogisticRegressionModel:
                    # feature names to ensure correct order during prediction
                    "feature_names": self.feature_names,
                    "metadata": self.metadata,
-                   # CRC information for conformal prediction
-                   "crc_info": self.crc_info
+                   # calibration information for conformal prediction
+                   "calibration_info": self.calibration_info
                }
         joblib.dump(payload, path)
         return str(path)
@@ -609,6 +612,6 @@ class LogisticRegressionModel:
         lm.pipeline = payload.get("pipeline")
         lm.feature_names = payload.get("feature_names")
         lm.metadata = payload.get("metadata", {})
-        lm.crc_info = payload.get("crc_info", {})
+        lm.calibration_info = payload.get("calibration_info", {})
         lm.trained = True
         return lm

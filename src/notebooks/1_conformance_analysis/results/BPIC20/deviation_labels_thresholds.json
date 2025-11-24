@@ -1,0 +1,79 @@
+[
+    {
+        "key": [
+            ">>",
+            "Declaration APPROVED by ADMINISTRATION"
+        ],
+        "value": 0.58
+    },
+    {
+        "key": [
+            ">>",
+            "Declaration REJECTED by ADMINISTRATION"
+        ],
+        "value": 0.35
+    },
+    {
+        "key": [
+            ">>",
+            "Declaration REJECTED by EMPLOYEE"
+        ],
+        "value": 0.53
+    },
+    {
+        "key": [
+            ">>",
+            "Payment Handled"
+        ],
+        "value": 0.11
+    },
+    {
+        "key": [
+            ">>",
+            "Request Payment"
+        ],
+        "value": 0.09
+    },
+    {
+        "key": [
+            "Declaration APPROVED by PRE_APPROVER",
+            ">>"
+        ],
+        "value": 0.02
+    },
+    {
+        "key": [
+            "Declaration FINAL_APPROVED by SUPERVISOR",
+            ">>"
+        ],
+        "value": 0.42
+    },
+    {
+        "key": [
+            "Declaration REJECTED by EMPLOYEE",
+            ">>"
+        ],
+        "value": 0.0
+    },
+    {
+        "key": [
+            "Declaration REJECTED by MISSING",
+            ">>"
+        ],
+        "value": 0.0
+    },
+    {
+        "key": [
+            "Declaration REJECTED by PRE_APPROVER",
+            ">>"
+        ],
+        "value": 0.02
+    },
+    {
+        "key": [
+            "Declaration SUBMITTED by EMPLOYEE",
+            ">>"
+        ],
+        "value": 0.02
+    }
+]
