@@ -333,7 +333,7 @@ class LogisticRegressionModel:
         self.empiricial_risk_values: Dict[str, Any] = {'alpha_quantile_risk': alpha_quantile_risk, 'risk_fitness_threshold': risk_fitness_threshold}
         
         # Standard LR params:
-        self.classifier = classifier if classifier is not None else LogisticRegression(max_iter=1000)
+        self.classifier = classifier if classifier is not None else LogisticRegression(max_iter=1000, class_weight="balanced")
         self.pipeline = None
         self.feature_names: Optional[List[str]] = None
         self.trained = False
@@ -505,7 +505,7 @@ class LogisticRegressionModel:
         for i, y in enumerate(targets):
             if y == 1:
                 residuals.append(1-p[i])
-            if y == 0:
+            else:
                 residuals.append(p[i])
                 
         quantile = np.quantile(np.array(sorted(residuals)), q=1-alpha)
