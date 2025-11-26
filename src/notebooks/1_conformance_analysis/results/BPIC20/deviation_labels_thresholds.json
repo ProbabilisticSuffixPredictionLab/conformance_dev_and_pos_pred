@@ -25,21 +25,21 @@
             ">>",
             "Payment Handled"
         ],
-        "value": 0.03
+        "value": 0.11
     },
     {
         "key": [
             ">>",
             "Request Payment"
         ],
-        "value": 0.3
+        "value": 0.09
     },
     {
         "key": [
             "Declaration APPROVED by PRE_APPROVER",
             ">>"
         ],
-        "value": 0.04
+        "value": 0.02
     },
     {
         "key": [

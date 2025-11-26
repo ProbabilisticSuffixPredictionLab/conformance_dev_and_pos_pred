@@ -176,6 +176,7 @@ class _SingleLabelIDP(nn.Module):
         x = self.layer_norm(h_comb)
         x = self.leaky_relu(x)
         x = self.dropout(x)
+        
         return self.fc_output(x).squeeze(-1)
 
 class LSTMSeparateIDP(nn.Module):

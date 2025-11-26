@@ -4,7 +4,7 @@
             ">>",
             "Admission IC"
         ],
-        "value": 0.31
+        "value": 0.32
     },
     {
         "key": [
@@ -25,7 +25,7 @@
             ">>",
             "ER Sepsis Triage"
         ],
-        "value": 0.04
+        "value": 0.01
     },
     {
         "key": [
@@ -53,28 +53,28 @@
             ">>",
             "Release C"
         ],
-        "value": 0.74
+        "value": 0.55
     },
     {
         "key": [
             "Admission IC",
             ">>"
         ],
-        "value": 0.0
+        "value": 0.01
     },
     {
         "key": [
             "Admission NC",
             ">>"
         ],
-        "value": 0.04
+        "value": 0.07
     },
     {
         "key": [
             "CRP",
             ">>"
         ],
-        "value": 0.48
+        "value": 0.13
     },
     {
         "key": [
@@ -102,27 +102,27 @@
             "IV Antibiotics",
             ">>"
         ],
-        "value": 0.38
+        "value": 0.22
     },
     {
         "key": [
             "IV Liquid",
             ">>"
         ],
-        "value": 0.31
+        "value": 0.33
     },
     {
         "key": [
             "LacticAcid",
             ">>"
         ],
-        "value": 0.45
+        "value": 0.29
     },
     {
         "key": [
             "Leucocytes",
             ">>"
         ],
-        "value": 0.65
+        "value": 0.69
     }
 ]
