@@ -273,11 +273,10 @@ class DeviationEvaluation:
     def __plot_roc_per_label(self, per_label_y_true: dict, per_label_y_score: dict, labels=None):
         """
         Plot ROC curves for multiple labels.
-        
         Args:
-            per_label_y_true: dict[label] -> list of 0/1 target values per case
-            per_label_y_score: dict[label] -> list of predicted scores per case
-            labels: list of labels to plot (default: all in per_label_y_true)
+        per_label_y_true: dict[label] -> list of 0/1 target values per case
+        per_label_y_score: dict[label] -> list of predicted scores per case
+        labels: list of labels to plot (default: all in per_label_y_true)
         """
         if labels is None:
             labels = sorted(per_label_y_true.keys())
@@ -364,7 +363,6 @@ class DeviationEvaluation:
 
         return {"per_label_auc": per_label_auc, "macro_auc": macro_auc}
     
-    
     # Sequence evaluation: Evaluate the place of occurence of deviation in suffix
     def get_suffix_devs(self):
         # Get the deviation values for which a deviation occured: 
@@ -423,18 +421,15 @@ class DeviationEvaluation:
         indices = [i for i, val in enumerate(lst) if val == x]
         return indices if indices else [0]
     
-    def likelihood_at_target_positions(
-        self,
-        tgt_suff_dev_poss: List[Dict[str, List[int]]],
-        pred_suff_dev_poss: List[Dict[str, List[Tuple[int, float]]]],
-    ) -> Tuple[List[Dict[str, List[Tuple[int, float]]]], Dict[str, float], float]:
+    def likelihood_at_target_positions(self,
+                                       tgt_suff_dev_poss: List[Dict[str, List[int]]],
+                                       pred_suff_dev_poss: List[Dict[str, List[Tuple[int, float]]]]) -> Tuple[List[Dict[str, List[Tuple[int, float]]]], Dict[str, float], float]:
         """
         For each label compute the predicted relative likelihood at the target positions.
-
         Returns:
-            case_level: list (per case) of dict[label] -> list[(target_pos, predicted_likelihood)]
-            per_label_mean: dict[label] -> mean likelihood across all target positions (includes zeros)
-            weighted_macro: occurrence-weighted mean across all labels
+        - case_level: list (per case) of dict[label] -> list[(target_pos, predicted_likelihood)]
+        - per_label_mean: dict[label] -> mean likelihood across all target positions (includes zeros)
+        - weighted_macro: occurrence-weighted mean across all labels
         """
         if len(tgt_suff_dev_poss) != len(pred_suff_dev_poss):
             raise ValueError("tgt_suff_dev_poss and pred_suff_dev_poss must have the same length")

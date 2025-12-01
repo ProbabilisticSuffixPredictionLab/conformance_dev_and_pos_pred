@@ -60,6 +60,27 @@ class DeviationPrediction:
                 
         # return pred_aligns, pred_prefs, pred_sufs, pred_aligns_prob
         return pred_aligns, pred_prefs, pred_sufs
+
+    def __get_all_alignments(self) -> List[List[Any]]:
+        """
+        Collects every sampled alignment, prefix, and suffix for each case without aggregation.
+        Returns three lists (alignments, prefixes, suffixes) where each entry corresponds
+        to one case and contains the list of samples for that case.
+        """
+        all_aligns = []
+        all_prefs = []
+        all_sufs = []
+
+        for smpls in self.pred_conf_set["samples_conformance"]:
+            alignments = [smpl["suffix_alignment"] for smpl in smpls]
+            prefixes = [smpl["prefix"] for smpl in smpls]
+            suffixes = [smpl["sampled_suffix"] for smpl in smpls]
+
+            all_aligns.append(alignments)
+            all_prefs.append(prefixes)
+            all_sufs.append(suffixes)
+
+        return all_aligns, all_prefs, all_sufs
     
     def get_aggregated_deviations(self):
         """
@@ -109,15 +130,15 @@ class DeviationPrediction:
         Each pred_aligns_prob[i] is a list of floats (same length), summing to ~1.0 (if available).
         """
         tgt_aligns, tgt_prefs, tgt_sufs = self.__get_target_aligns_pref_suf()
-
-        # Basic sanity checks for length consistency
-        n = len(tgt_prefs)
-        if not (len(tgt_aligns) == n and len(tgt_sufs) == n):
-            raise ValueError("Mismatched lengths between target prefixes/aligns/suffixes.")
-
         # Remove filler from target alignments
         cleaned_tgt_alignments = [[a for a in align if a != ('>>', None) and a != (None, '>>')] for align in tgt_aligns]
         tgt_deviations = [[(a, b) for (a, b) in align if a != b] for align in cleaned_tgt_alignments]
+        
+        pred_aligns_all, pred_prefs_all, pred_sufs_all = self.__get_all_alignments()
+
+        n = len(tgt_prefs)
+        if not (len(tgt_aligns) == len(tgt_sufs) == len(pred_aligns_all) == len(pred_prefs_all) == len(pred_sufs_all) == n):
+            raise ValueError("Mismatched lengths between target/predicted prefixes/alignments/suffixes.")
 
         # Aggregate probabilistic deivations
         results = []
@@ -130,29 +151,25 @@ class DeviationPrediction:
             # Collect cleaned alignments and deviations for each sample
             sampled_suffixes = []
             cleaned_aligns = []
-            sample_devs = []   
+            sample_devs = []
             for smpl in smpls:
-                suffix = smpl["sampled_suffix"]
-                sampled_suffixes.append(suffix)
+                 suffix = smpl["sampled_suffix"]
+                 sampled_suffixes.append(suffix)
+                     
+                 # Alignment 
+                 align = smpl["suffix_alignment"]
+                 cleaned_align = [a for a in align if a != ('>>', None) and a != (None, '>>')]
+                 cleaned_aligns.append(cleaned_align)
                     
-                # Alignment 
-                align = smpl["suffix_alignment"]
-                cleaned_align = [a for a in align if a != ('>>', None) and a != (None, '>>')]
-                cleaned_aligns.append(cleaned_align)
-                    
-                # Deviations
-                devs = [(a, b) for (a, b) in cleaned_align if a != b]
-                # List of deviations across all samples:
-                for dev in devs:
-                    sample_devs.append(dev)
+                 # Deviations
+                 devs = [(a, b) for (a, b) in cleaned_align if a != b]
+                 # List of deviations across all samples:
+                 for dev in devs:
+                     sample_devs.append(dev)
 
             # Count frequencies
             counter_devs = Counter(sample_devs) 
             all_devs_with_prob = [(k, v / total_samples) for k, v in counter_devs.items()]
-            
-            # why ????
-            
-            # design based on the calibrated probability of the conformal model analysis
             
             pred_deviations = []
             for (k,p) in all_devs_with_prob:
@@ -171,17 +188,15 @@ class DeviationPrediction:
                     else:
                         continue
                 
-            results.append({
-                "prefix": tgt_prefs[i],
-                "tgt_suffix": tgt_sufs[i],
-                "pred_suffix": sampled_suffixes,
-                # All suffix aligning (synchronous) and deviating moves 
-                "tgt_cleaned_aligns": cleaned_tgt_alignments[i],
-                "pred_cleaned_aligns": sampled_suffixes,
-                # All suffix deviating only moves with probability across all samples
-                "tgt_deviations": tgt_deviations[i],
-                "pred_deviations": pred_deviations,
-                "deviations_prob_per_case": all_devs_with_prob})
+            results.append({"prefix": tgt_prefs[i],
+                            "tgt_suffix": tgt_sufs[i],
+                            "pred_suffix": sampled_suffixes,
+                            "tgt_cleaned_aligns": cleaned_tgt_alignments[i],
+                            "pred_cleaned_aligns": cleaned_aligns,
+                            # All suffix deviating only moves with probability across all samples
+                            "tgt_deviations": tgt_deviations[i],
+                            "pred_deviations": pred_deviations,
+                            "deviations_prob_per_case": all_devs_with_prob})
 
         return results
     
@@ -192,4 +207,4 @@ class DeviationPrediction:
         with path.open("wb") as f:
             pickle.dump(deviations, f)
         return str(path)
-        
+
