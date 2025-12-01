@@ -7,7 +7,7 @@ from tqdm import trange
 import re
 import pm4py
 from pm4py.objects.conversion.log import converter as log_converter
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from imblearn.under_sampling import OneSidedSelection
 import torch
 from torch.utils.data import Dataset
@@ -48,9 +48,6 @@ class DeviationLabeling:
         pn, im, fm = pm4py.convert.convert_to_petri_net(pm)
         return pn, im, fm
     
-    def _sanitize_label(self, s: str) -> str:
-        return re.sub(r'[^0-9A-Za-z_]', '_', str(s))
-
     def _extract_deviations_from_alignment(self, ev_log, alignment_results: List[dict]):
         """
         From one alignment result per trace, produce:
@@ -99,25 +96,6 @@ class DeviationLabeling:
                     
         return sorted(dev_types), dict(dev_pos_by_case), 
 
-    @staticmethod
-    def _drop_single_positive_labels(df: pd.DataFrame, dev_types: List[str]) -> Tuple[pd.DataFrame, List[str]]:
-        """
-        Remove y_<label> columns that contain at most a single positive example.
-        Returns the pruned DataFrame and the list of remaining deviation labels.
-        """
-        keep_dev_types = []
-        drop_cols = []
-        for dt in dev_types:
-            col = f"y_{dt}"
-            if col not in df.columns:
-                continue
-            if df[col].sum() <= 1:
-                drop_cols.append(col)
-            else:
-                keep_dev_types.append(dt)
-        df = df.drop(columns=drop_cols, errors="ignore")
-        return df, keep_dev_types
-
     def generate_individual_labels(self,
                                    trace_attr: List[str],
                                    max_prefix_cap: int = None,
@@ -163,13 +141,6 @@ class DeviationLabeling:
         # case attribute encoders
         case_attr_list = trace_attr or []
         
-        # Always include weekday_start and weekday_end
-        # week_days_mapping = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        # if "weekday_start" not in case_attr_list:
-        #     case_attr_list.append("weekday_start")
-        # if "weekday_end" not in case_attr_list:
-        #    case_attr_list.append("weekday_end")
-        
         # initializes and fits LabelEncoder objects for each trace attribute
         case_attr_encoders: Dict[str, LabelEncoder] = {}
         for ca in case_attr_list:
@@ -192,21 +163,9 @@ class DeviationLabeling:
             g = g.reset_index(drop=True)
             n = len(g)
 
-            # Compute weekday_start and weekday_end for the entire trace
-            # first_ts = g.loc[0, "time:timestamp"]
-            # last_ts = g.loc[n-1, "time:timestamp"]
-            # weekday_start_val = week_days_mapping[first_ts.weekday()] if pd.notna(first_ts) else "NA"
-            # weekday_end_val = week_days_mapping[last_ts.weekday()] if pd.notna(last_ts) else "NA"
-
             # encode additional trace attrs once per case
             encoded_case_attrs = {}
             for ca in case_attr_list:
-                
-                # if ca == "weekday_start":
-                #     raw = weekday_start_val
-                # elif ca == "weekday_end":
-                #     raw = weekday_end_val
-                # else:
                 
                 raw = g[ca].iloc[0] if ca in g.columns else "NA"
                 
@@ -269,13 +228,19 @@ class DeviationLabeling:
 
         df_flat = pd.DataFrame(rows)
         
-        # according to paper: remove the deviations that occur only a single time.
-        df_flat, dev_types = self._drop_single_positive_labels(df_flat, dev_types)
+        trace_attr_cols = [col for col in df_flat.columns if col.startswith("trace_attr_")]
+        trace_attr_scalers: Dict[str, StandardScaler] = {}
+        for col in trace_attr_cols:
+            scaler = StandardScaler()
+            col_values = df_flat[col].astype(float).to_numpy().reshape(-1, 1)
+            df_flat[col] = scaler.fit_transform(col_values).astype(np.float32).ravel()
+            trace_attr_scalers[col] = scaler
 
         base_encoders = {"activity_ids": act2idx,
                          "resource_ids": res2idx,
                          "month_ids": month2idx,
                          "trace_attr_encoders": case_attr_encoders,
+                         "trace_attr_scalers": trace_attr_scalers,
                          "L_max": L_max}
 
         if self.label_strategy == "collective":
@@ -563,7 +528,7 @@ class PrefixDataset(Dataset):
         self.activity_col = activity_col
         self.resource_col = resource_col
         self.month_col = month_col
-        self.trace_cols = trace_cols
+        self.trace_cols = trace_cols or []
         self.y_cols = y_cols
 
     def __len__(self, split: str = "train"):
@@ -587,10 +552,11 @@ class PrefixDataset(Dataset):
         x_month = torch.tensor(row[self.month_col], dtype=torch.long)
 
         if self.trace_cols:
-            trace_vals = np.asarray(row[self.trace_cols], dtype=np.int64)
-            trace_feats = torch.tensor(trace_vals, dtype=torch.long)
+            trace_cols = self._resolve_trace_columns(df)
+            trace_vals = np.asarray(row[trace_cols], dtype=np.float32)
+            trace_feats = torch.tensor(trace_vals, dtype=torch.float32)
         else:
-            trace_feats = torch.zeros(0, dtype=torch.long)
+            trace_feats = torch.zeros(0, dtype=torch.float32)
 
         y_columns = self.y_cols
         if y_columns:
@@ -605,15 +571,18 @@ class PrefixDataset(Dataset):
                            df: pd.DataFrame,
                            y_columns: List[str],
                            device=None):
+        
         device = torch.device(device) if device is not None else torch.device("cpu")
+        
         act_arr = np.asarray(df[self.activity_col].tolist(), dtype=np.int64)
         res_arr = np.asarray(df[self.resource_col].tolist(), dtype=np.int64)
         month_arr = np.asarray(df[self.month_col].tolist(), dtype=np.int64)
 
         if self.trace_cols:
-            trace_arr = df[self.trace_cols].to_numpy(dtype=np.int64, copy=True)
+            trace_cols = self._resolve_trace_columns(df)
+            trace_arr = df[trace_cols].to_numpy(dtype=np.float32, copy=True)
         else:
-            trace_arr = np.zeros((len(df), 0), dtype=np.int64)
+            trace_arr = np.zeros((len(df), 0), dtype=np.float32)
 
         if y_columns:
             y_arr = df[y_columns].to_numpy(dtype=np.int64, copy=True)
@@ -623,7 +592,7 @@ class PrefixDataset(Dataset):
         x_act = torch.tensor(act_arr, dtype=torch.long, device=device)
         x_res = torch.tensor(res_arr, dtype=torch.long, device=device)
         x_month = torch.tensor(month_arr, dtype=torch.long, device=device)
-        trace_tensor = torch.tensor(trace_arr, dtype=torch.long, device=device)
+        trace_tensor = torch.tensor(trace_arr, dtype=torch.float32, device=device)
         y_tensor = torch.tensor(y_arr, dtype=torch.long, device=device)
 
         return TensorDataset(x_act, x_res, x_month, trace_tensor, y_tensor)
@@ -644,7 +613,7 @@ class PrefixDataset(Dataset):
             val_dict[label] = self._to_tensor_dataset(self.df_val_dict[label], y_columns, device)
             test_dict[label] = self._to_tensor_dataset(self.df_test_dict[label], y_columns, device)
         return train_dict, val_dict, test_dict
-
+    
     @staticmethod
     def save_datasets(train_dataset, test_dataset, val_dataset, save_path: str):
         os.makedirs(save_path, exist_ok=True)
@@ -682,3 +651,18 @@ class PrefixDataset(Dataset):
         test_dataset = _torch_load(test_path)
 
         return train_dataset, val_dataset, test_dataset
+    
+    def _resolve_trace_columns(self, df: pd.DataFrame) -> List[str]:
+        resolved = []
+        missing = []
+        for name in self.trace_cols:
+            prefixed = name if name.startswith("trace_attr_") else f"trace_attr_{name}"
+            if prefixed in df.columns:
+                resolved.append(prefixed)
+            elif name in df.columns:
+                resolved.append(name)
+            else:
+                missing.append(name)
+        if missing:
+            raise KeyError(f"Trace attributes not found in dataframe columns: {missing}")
+        return resolved
