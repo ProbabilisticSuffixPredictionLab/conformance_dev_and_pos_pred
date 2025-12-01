@@ -1,6 +1,7 @@
 import ast
+import random
 from collections import Counter, defaultdict
-from typing import Iterable, Dict, List, Tuple, Union
+from typing import Iterable, Dict, List, Tuple, Union, Any
 import numpy as np
 from sklearn.metrics import roc_auc_score, roc_curve, auc
 import matplotlib.pyplot as plt
@@ -182,215 +183,245 @@ class DeviationEvaluation:
 
         return precision_macro, recall_macro, precision_per_label, recall_per_label
     
-    # Sequence evaluation: Evaluate the place of occurence of deviation in suffix
+    def _cases_with_target_deviations(self) -> List[dict]:
+        return [
+            {
+                'tgt_suffix': dr.get('tgt_suffix', []),
+                'pred_suffix': dr.get('pred_suffix', []),
+                'tgt_aligns': dr.get('tgt_cleaned_aligns', []),
+                'pred_aligns': dr.get('pred_cleaned_aligns', []),
+                'tgt_deviations': dr.get('tgt_deviations', []),
+                'pred_deviations': dr.get('pred_deviations', []),
+            }
+            for dr in self.deviation_results
+            if len(dr.get('tgt_deviations', [])) > 0
+        ]
+
+    # Sequence evaluation: Evaluate the position of deviation in suffix
     def get_suffix_devs(self):
-        # Get the deviation values for which a deviation occured: 
-        real_deviations = [{'tgt_suffix': dr.get('tgt_suffix', []),
-                            'pred_suffix': dr.get('pred_suffix', []),
-                            # alignments
-                            'tgt_aligns':dr.get('tgt_cleaned_aligns', []),
-                            'pred_aligns':dr.get('pred_cleaned_aligns', [])} for dr in self.deviation_results if len(dr.get('tgt_deviations', [])) > 0]
-                
-        # Target deviation and suffix
-        real_tgt_devs = [dr.get('tgt_deviations', []) for dr in real_deviations]
-        
-        real_tgt_suffixes = [dr.get('tgt_suffix', []) for dr in real_deviations]
-        
-        # Predicted deviation and suffix (100 elements per list)
-        real_pred_devs = [dr.get('pred_deviations', []) for dr in real_deviations]
-        
-        real_pred_suffix_samples = [dr.get('pred_suffix', []) for dr in real_deviations]
-        
-        assert len(real_tgt_devs) == len(real_tgt_suffixes) == len(real_pred_devs) ==  len(real_pred_suffix_samples)
-        
-        tgt_suff_dev_pos = []
-        pred_suff_dev_pos = []
-        for i, suffix in enumerate(real_tgt_suffixes):
-            # Target deviation with position in suffix
-            tgt_dev_labels = tgt_dev_labels = [a if a != ">>" else b for (a, b) in real_tgt_devs[i]]
-            
-            # position of target deviations in the target:
-            tgt_p = {}
-            for t_dev in tgt_dev_labels:
-                tgt_p[t_dev] = self._all_indices(suffix, t_dev)
-            tgt_suff_dev_pos.append(tgt_p)
-            
-            # Based on the real position get the position of the pred
-            pred_dev_labels = pred_dev_labels = [a if a != ">>" else b for (a, b) in real_pred_devs[i]]
-            pred_dev_in_tgt = [d for d in pred_dev_labels if d in tgt_dev_labels]
-            
-            # Stores for the suffix
-            pred_p = {}
-            # 1 or multiple target deviations for this suffix
-            for p_dev in pred_dev_in_tgt:
-                positions = []
-                # 100 samples
-                for sample in real_pred_suffix_samples[i]:
-                    # add the elements to the existing list
-                    positions.extend(self._all_indices(sample, p_dev))
-                # Counts for each index the occurence of the deviation across the samples, e.g., 'Take in charge ticket': Counter({0: 83, 1: 21, 2: 9, 3: 9, 4: 2})
-                count_positions = Counter(positions)
-                # sort the indices and keeps an 
-                sorted_relative_count_positions = sorted(((p, count_positions[p] / len(real_pred_suffix_samples[i])) for p in count_positions),key=lambda item: item[0])
-                pred_p[p_dev] = sorted_relative_count_positions
-            pred_suff_dev_pos.append(pred_p)  
-        
-        return tgt_suff_dev_pos, pred_suff_dev_pos, real_tgt_suffixes, real_pred_suffix_samples
+        real_deviations = self._cases_with_target_deviations()
+
+        tgt_aligns = [rd.get('tgt_aligns', []) for rd in real_deviations]
+        pred_aligns = [rd.get('pred_aligns', []) for rd in real_deviations]
+        tgt_suffixes = [rd.get('tgt_suffix', []) for rd in real_deviations]
+        pred_suffix_samples = [rd.get('pred_suffix', []) for rd in real_deviations]
+        real_tgt_devs = [rd.get('tgt_deviations', []) for rd in real_deviations]
+        real_pred_devs = [rd.get('pred_deviations', []) for rd in real_deviations]
+
+        assert len(real_tgt_devs) == len(tgt_suffixes) == len(real_pred_devs) == len(pred_suffix_samples)
+
+        tgt_model_moves, tgt_log_moves = [], []
+        pred_model_moves, pred_log_moves = [], []
+
+        for align in tgt_aligns:
+            model_positions: Dict[str, List[int]] = defaultdict(list)
+            log_positions: Dict[str, List[int]] = defaultdict(list)
+            for idx, move in enumerate(align):
+                if move[0] == '>>' and move[1] is not None:
+                    model_positions[move[1]].append(idx)
+                elif move[1] == '>>' and move[0] is not None:
+                    log_positions[move[0]].append(idx)
+            tgt_model_moves.append(dict(model_positions))
+            tgt_log_moves.append(dict(log_positions))
+
+        for align_samples in pred_aligns:
+            model_counts: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+            log_counts: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+            for sample in align_samples:
+                for idx, move in enumerate(sample):
+                    if move[0] == '>>' and move[1] is not None:
+                        model_counts[move[1]][idx] += 1
+                    elif move[1] == '>>' and move[0] is not None:
+                        log_counts[move[0]][idx] += 1
+            pred_model_moves.append({
+                label: {pos: pos_counts[pos] for pos in sorted(pos_counts)}
+                for label, pos_counts in model_counts.items()
+            })
+            pred_log_moves.append({
+                label: {pos: pos_counts[pos] for pos in sorted(pos_counts)}
+                for label, pos_counts in log_counts.items()
+            })
+
+        return tgt_suffixes, pred_suffix_samples, (tgt_model_moves, tgt_log_moves), (pred_model_moves, pred_log_moves)
     
     def likelihood_at_target_positions(self,
-                                       tgt_suff_dev_poss: List[Dict[str, List[int]]],
-                                       pred_suff_dev_poss: List[Dict[str, List[Tuple[int, float]]]]) -> Tuple[List[Dict[str, List[Tuple[int, float]]]], Dict[str, float], float]:
+                                       tgt_model_moves: List[Dict[str, List[int]]],
+                                       tgt_log_moves: List[Dict[str, List[int]]],
+                                       pred_model_moves: List[Dict[str, Dict[int, int]]],
+                                       pred_log_moves: List[Dict[str, Dict[int, int]]],
+                                       num_samples: int = 100) -> Tuple[Dict[str, List[Dict[str, List[Tuple[int, float]]]]],
+                                                                         Dict[str, Dict[str, float]],
+                                                                         Dict[str, float]]:
         """
-        For each label compute the predicted relative likelihood at the target positions.
-        Returns:
-        - case_level: list (per case) of dict[label] -> list[(target_pos, predicted_likelihood)]
-        - per_label_mean: dict[label] -> mean likelihood across all target positions (includes zeros)
-        - weighted_macro: occurrence-weighted mean across all labels
+        Compute likelihoods that predicted move positions match target move positions
+        for both model moves (('>>', x)) and log moves ((x, '>>')).
+
+        Returns a tuple of three dictionaries keyed by {"model", "log"}:
+        - case_level: list per case, each dict[label] -> list[(position, probability)]
+        - per_label_mean: per move label mean probability over all its target positions
+        - weighted_macro: occurrence-weighted mean probability across labels
         """
-        if len(tgt_suff_dev_poss) != len(pred_suff_dev_poss):
-            raise ValueError("tgt_suff_dev_poss and pred_suff_dev_poss must have the same length")
+        def _compute(tgt_moves: List[Dict[str, List[int]]],
+                     pred_moves: List[Dict[str, Dict[int, int]]]
+                     ) -> Tuple[List[Dict[str, List[Tuple[int, float]]]], Dict[str, float], float]:
+            if len(tgt_moves) != len(pred_moves):
+                raise ValueError("Target and predicted move collections must have identical length.")
 
-        case_level: List[Dict[str, List[Tuple[int, float]]]] = []
-        per_label_scores: Dict[str, List[float]] = defaultdict(list)
-        per_label_support: Dict[str, int] = defaultdict(int)
+            case_level: List[Dict[str, List[Tuple[int, float]]]] = []
+            per_label_scores: Dict[str, List[float]] = defaultdict(list)
+            per_label_support: Dict[str, int] = defaultdict(int)
 
-        all_labels = sorted({lbl for case in tgt_suff_dev_poss for lbl in case.keys()})
+            all_labels = sorted({lbl for case in tgt_moves for lbl in case.keys()})
 
-        for tgt_case, pred_case in zip(tgt_suff_dev_poss, pred_suff_dev_poss):
-            case_entry: Dict[str, List[Tuple[int, float]]] = {}
-            for label in all_labels:
-                tgt_positions = tgt_case.get(label, [])
-                if not tgt_positions:
-                    continue
-                pred_distribution = dict(pred_case.get(label, []))
-                position_scores = [(pos, float(pred_distribution.get(pos, 0.0))) for pos in tgt_positions]
-                case_entry[label] = position_scores
-                per_label_support[label] += len(position_scores)
-                for _, score in position_scores:
-                    per_label_scores[label].append(score)
-            case_level.append(case_entry)
+            for tgt_case, pred_case in zip(tgt_moves, pred_moves):
+                case_entry: Dict[str, List[Tuple[int, float]]] = {}
+                for label in all_labels:
+                    positions = tgt_case.get(label, [])
+                    if not positions:
+                        continue
+                    counts = pred_case.get(label, {})
+                    position_scores: List[Tuple[int, float]] = []
+                    for pos in positions:
+                        count = counts.get(pos, 0)
+                        prob = (count / num_samples) if num_samples > 0 else 0.0
+                        position_scores.append((pos, float(prob)))
+                        per_label_scores[label].append(float(prob))
+                    per_label_support[label] += len(position_scores)
+                    case_entry[label] = position_scores
+                case_level.append(case_entry)
 
-        per_label_mean = {
-            label: (float(np.mean(per_label_scores[label])) if per_label_scores[label] else 0.0)
-            for label in all_labels
-        }
+            per_label_mean = {
+                label: (float(np.mean(scores)) if scores else 0.0)
+                for label, scores in per_label_scores.items()
+            }
 
-        total_support = sum(per_label_support[label] for label in all_labels)
-        weighted_macro = (
-            float(sum(sum(per_label_scores[label]) for label in all_labels) / total_support)
-            if total_support > 0 else 0.0
-        )
+            total_support = sum(per_label_support.values())
+            weighted_macro = (
+                float(sum(sum(scores) for scores in per_label_scores.values()) / total_support)
+                if total_support > 0 else 0.0
+            )
+            return case_level, per_label_mean, weighted_macro
+
+        model_case, model_label_mean, model_weighted = _compute(tgt_model_moves, pred_model_moves)
+        log_case, log_label_mean, log_weighted = _compute(tgt_log_moves, pred_log_moves)
+
+        case_level = {"model": model_case, "log": log_case}
+        per_label_mean = {"model": model_label_mean, "log": log_label_mean}
+        weighted_macro = {"model": model_weighted, "log": log_weighted}
 
         return case_level, per_label_mean, weighted_macro
     
     def plot_suffix_deviation_distribution(self,
                                            suffix_index: int,
                                            label: str,
-                                           tgt_suff_dev_poss: List[Dict[str, List[int]]],
-                                           pred_suff_dev_poss: List[Dict[str, List[Tuple[int, float]]]],
-                                           pred_suffix_samples: List[List[List[str]]]) -> List[int]:
+                                           move: str,
+                                           tgt_suff_move: List[Dict[str, List[int]]],
+                                           pred_suff_move: List[Dict[str, Dict[int, int]]],
+                                           pred_suffix_samples: List[List[List[str]]],
+                                           tgt_suffixes: List[List[str]] = None,
+                                           num_samples: int = 100) -> Dict[str, Any]:
         """
-        Visualize, for a single suffix and deviation label, how often the label
-        appears at each position across predicted samples, highlighting the true positions.
-
-        Returns:
-            List[int]: indices of predicted samples that contain the label at the most likely position.
+        Visualize the distribution of a deviation label for a given suffix case:
+        - Blue bars = occurrences at non-top-3 positions, green bars = three most frequent positions.
+        - Dashed orange lines mark the true target positions.
+        - Shows the target suffix and one predicted sample that exhibits the deviation at a true position.
         """
-        if suffix_index < 0 or suffix_index >= len(tgt_suff_dev_poss):
-            raise IndexError("suffix_index out of range")
+        if suffix_index < 0 or suffix_index >= len(tgt_suff_move):
+            raise IndexError("suffix_index out of range.")
 
-        tgt_case = tgt_suff_dev_poss[suffix_index]
-        pred_case = pred_suff_dev_poss[suffix_index]
+        if tgt_suffixes is None:
+            tgt_suffixes = [case['tgt_suffix'] for case in self._cases_with_target_deviations()]
 
-        true_positions = tgt_case.get(label, [])
-        pred_distribution = dict(pred_case.get(label, []))
+        if suffix_index >= len(tgt_suffixes):
+            raise IndexError("suffix_index exceeds available target suffixes.")
 
-        if not pred_distribution:
-            raise ValueError(f"No predicted occurrences found for label '{label}' in suffix {suffix_index}")
+        tgt_case_positions = tgt_suff_move[suffix_index]
+        pred_case_counts = pred_suff_move[suffix_index]
 
-        positions = sorted(pred_distribution.keys())
-        percentages = np.array([pred_distribution[pos] * 100.0 for pos in positions])
+        true_positions = tgt_case_positions.get(label, [])
+        counts_dict = pred_case_counts.get(label, {})
+        if not counts_dict:
+            raise ValueError(f"No predicted occurrences for label '{label}' in suffix {suffix_index}.")
 
-        top_pos_idx = np.argsort(percentages)[-3:]
-        top_pos_set = {positions[idx] for idx in top_pos_idx}
+        all_positions = sorted(counts_dict.keys())
+        percentages = [
+            (counts_dict[pos] / num_samples) * 100.0 if num_samples > 0 else 0.0
+            for pos in all_positions
+        ]
 
-        base_color = "#1f77b4"
-        highlight_color = "#2ca02c"
-        colors = [highlight_color if pos in top_pos_set else base_color for pos in positions]
+        top_positions = sorted(all_positions, key=lambda p: counts_dict[p], reverse=True)[:3]
+        top_position_set = set(top_positions)
 
-        fig = plt.figure(figsize=(12, 6.6))
-        gs = fig.add_gridspec(4, 1, height_ratios=[2.4, 1, 1, 1], hspace=0.45)
+        fig = plt.figure(figsize=(11, 6.5))
+        gs = fig.add_gridspec(3, 1, height_ratios=[2.3, 1, 1], hspace=0.5)
 
         ax_hist = fig.add_subplot(gs[0])
-        bars = ax_hist.bar(positions, percentages, color=colors, edgecolor="#4d6278", alpha=0.95)
-        ax_hist.set_xlabel("Position in suffix", fontsize=11)
-        ax_hist.set_ylabel("Occurrence percentage (%)", fontsize=11)
-        ax_hist.set_title(f"Deviation '{label}' — suffix #{suffix_index}", fontweight="bold", fontsize=13)
+        colors = ["#2ca02c" if pos in top_position_set else "#1f77b4" for pos in all_positions]
+        bars = ax_hist.bar(all_positions, percentages, color=colors, edgecolor="#31465f", width=0.55)
+        ax_hist.set_xlabel("Positions in sampled suffixes", fontsize=11)
+        ax_hist.set_ylabel("Occurrence in 100 samples (%)", fontsize=11)
+        
+        if move == 'log':
+            ax_hist.set_title(f"Deviation: ({label}, >>)", fontweight="bold", fontsize=13)
+        else:
+            ax_hist.set_title(f"Deviation: (>>, {label})", fontweight="bold", fontsize=13)
 
         for bar, pct in zip(bars, percentages):
-            ax_hist.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.8,
-                         f"{pct:.1f}%", ha="center", va="bottom", fontsize=8)
+             ax_hist.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.8,
+                         f"{pct:.1f}%", ha="center", va="bottom", fontsize=8.5)
 
         for idx, tp in enumerate(true_positions):
-            ax_hist.axvline(tp, color="#d95f02", linestyle="--", linewidth=1.8,
+            ax_hist.axvline(tp, color="#d95f02", linestyle="--", linewidth=1.6,
                             label="True position" if idx == 0 else None)
 
-        ax_hist.set_ylim(0, max(percentages) * 1.25)
+        ax_hist.set_ylim(0, max(percentages) * 1.25 if percentages else 5)
         if true_positions:
             ax_hist.legend(loc="upper right", fontsize=9)
-        ax_hist.grid(axis="y", linestyle=":", alpha=0.4)
+        ax_hist.grid(axis="y", linestyle=":", alpha=0.35)
 
-        most_likely_pos = positions[int(np.argmax(percentages))]
-        samples_counter = Counter(tuple(sample) for sample in pred_suffix_samples[suffix_index])
-        matching_samples: List[Tuple[int, List[str], int]] = []
+        samples_case = pred_suffix_samples[suffix_index]
+        matching_samples = []
+        target_position_set = set(true_positions)
+        for sample_idx, sample in enumerate(samples_case):
+            match_positions = [pos for pos in true_positions if pos < len(sample) and sample[pos] == label]
+            if match_positions:
+                matching_samples.append((sample_idx, sample, match_positions))
 
-        for sample_idx, sample in enumerate(pred_suffix_samples[suffix_index]):
-            indices = [i for i, val in enumerate(sample) if val == label]
-            if most_likely_pos in indices:
-                matching_samples.append((sample_idx, sample, samples_counter[tuple(sample)]))
+        if not matching_samples:
+            raise ValueError(f"No predicted sample contains '{label}' at any target position for suffix {suffix_index}.")
 
-        unique_samples: Dict[Tuple[str, ...], Tuple[int, List[str], int]] = {}
-        for sample_idx, sample, freq in matching_samples:
-            key = tuple(sample)
-            if key not in unique_samples:
-                unique_samples[key] = (sample_idx, sample, freq)
+        chosen_idx, chosen_sample, highlight_positions = random.choice(matching_samples)
+        samples_counter = Counter(tuple(s) for s in samples_case)
+        chosen_freq = samples_counter[tuple(chosen_sample)]
 
-        top_samples = sorted(unique_samples.values(), key=lambda x: x[2], reverse=True)[:3]
-
-        def _draw_process(ax, events: List[str], freq: int, sample_idx: int):
+        def _draw_sequence(ax, events: List[str], highlight_positions: List[int], title: str):
             ax.axis("off")
             ax.set_xlim(0, 1)
             ax.set_ylim(-0.1, 1.0)
-
-            if not events:
-                ax.text(0.5, 0.45, "(empty)", ha="center", va="center", fontsize=8.5)
-                return
-
             n = len(events)
-            x_positions = np.linspace(0.12, 0.88, n)
-            box_width = min(0.14, 0.6 / max(n, 2))
-            box_height = 0.28
-
-            ax.text(0.04, 0.88, f"sample #{sample_idx}  (freq={freq})",
-                    fontsize=8.5, fontweight="semibold", ha="left", color="#24415c")
-
+            if n == 0:
+                ax.text(0.5, 0.45, "(empty suffix)", ha="center", va="center", fontsize=9)
+                return
+            x_positions = np.linspace(0.08, 0.92, n)
+            width = min(0.12, 0.65 / max(n, 2))
+            ax.text(0.02, 0.92, title, fontsize=9.5, fontweight="semibold", color="#2d4059", ha="left")
             for idx, (event, x) in enumerate(zip(events, x_positions)):
-                rect = plt.Rectangle((x - box_width / 2, 0.32), box_width, box_height,
-                                     linewidth=0.9, edgecolor="#5b6a7f", facecolor="#f1f5fb")
+                facecolor = "#ffe4c4" if idx in highlight_positions else "#f7f9fc"
+                rect = plt.Rectangle((x - width / 2, 0.35), width, 0.3,
+                                    edgecolor="#516173", linewidth=0.9, facecolor=facecolor)
                 ax.add_patch(rect)
-                ax.text(x, 0.46, event, ha="center", va="center", fontsize=8.3)
-
+                ax.text(x, 0.5, event, ha="center", va="center", fontsize=8.4)
                 if idx < n - 1:
                     ax.annotate("",
-                                xy=(x_positions[idx + 1] - box_width / 2 + 0.005, 0.46),
-                                xytext=(x + box_width / 2 - 0.005, 0.46),
-                                arrowprops=dict(arrowstyle="->", color="#5b6a7f", linewidth=0.9))
-            
-        for i, (sample_idx, sample, freq) in enumerate(top_samples):
-            ax_proc = fig.add_subplot(gs[i + 1])
-            _draw_process(ax_proc, sample, freq, sample_idx)
+                                xy=(x_positions[idx + 1] - width / 2 + 0.004, 0.5),
+                                xytext=(x + width / 2 - 0.004, 0.5),
+                                arrowprops=dict(arrowstyle="->", linewidth=0.9, color="#516173"))
+
+        target_events = tgt_suffixes[suffix_index]
+        _draw_sequence(fig.add_subplot(gs[1]), target_events, true_positions, "Target suffix (true deviation position)")
+
+        pred_title = f"Exemplary sample #{chosen_idx} (freq={chosen_freq}) with deviation at target position"
+        _draw_sequence(fig.add_subplot(gs[2]), chosen_sample, highlight_positions, pred_title)
 
         fig.tight_layout()
         plt.show()
-
-        print(f"Samples placing '{label}' at position {most_likely_pos}: {[idx for idx, _, _ in matching_samples]}")

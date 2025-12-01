@@ -4,14 +4,14 @@
             ">>",
             "Assign seriousness"
         ],
-        "value": 0.18
+        "value": 1.0
     },
     {
         "key": [
             "Create SW anomaly",
             ">>"
         ],
-        "value": 0.03
+        "value": 0.02
     },
     {
         "key": [
@@ -25,14 +25,14 @@
             "Resolve ticket",
             ">>"
         ],
-        "value": 0.11
+        "value": 0.06
     },
     {
         "key": [
             "Take in charge ticket",
             ">>"
         ],
-        "value": 0.19
+        "value": 0.2
     },
     {
         "key": [
