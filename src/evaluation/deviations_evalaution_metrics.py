@@ -29,13 +29,12 @@ class DeviationEvaluation:
         """
         Compute per-label precision and recall only for labels appearing in the target set,
         then return macro-averages across those target labels.
-        
+    
         Per label:
         TP: pred 1, tgt 1
         FP: pred 1, tgt 0
         TN: pred 0, tgt 0
         FN: pred 0, tgt 1
-
         - macro: Get precision and recall per label and take the mean over all.      
         """
         # collect per-case counters
@@ -107,7 +106,6 @@ class DeviationEvaluation:
         FP: pred 0, tgt 1
         TN: pred 1, tgt 0
         FN: pred 1, tgt 1
-        
         - macro: Get precision and recall per label and take the mean over all.      
         """
         tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
@@ -184,200 +182,23 @@ class DeviationEvaluation:
 
         return precision_macro, recall_macro, precision_per_label, recall_per_label
     
-    def roc_auc_macro_by_label(self, plot: bool = True) -> Tuple[float, Dict[str, float]]:
-        """
-        Compute ROC AUC per-label for the *deviation* event (label present).
-        - Positive class = label IS present in target (tgt_has == True).
-        - Predicted score = 1.0 if label IS present in prediction (pred_has == True), else 0.0.
-
-        Returns:
-        (macro_auc, auc_per_label)
-        - macro_auc: mean AUC across labels with a valid AUC (labels with only one class in y_true are ignored).
-        - auc_per_label: dict mapping label -> AUC (float('nan') for labels with undefined AUC).
-        """
-        # gather lists (same structure as in your precision/recall method)
-        tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
-        pred_deviations = [dr.get('pred_deviations', []) for dr in self.deviation_results]
-
-        # build label universe and total_tgt to restrict evaluation to labels that appear in targets
-        label_universe = set()
-        total_tgt = defaultdict(int)
-        for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
-            p_set = set(pred_list)
-            t_set = set(tgt_list)
-            label_universe |= (p_set | t_set)
-            t_ctr = Counter(tgt_list)
-            for lbl in (p_set | t_set):
-                total_tgt[lbl] += t_ctr.get(lbl, 0)
-
-        # restrict to labels that exist in target (same rule you used for precision/recall)
-        target_label_list = sorted(k for k, v in total_tgt.items() if v > 0)
-
-        auc_per_label: Dict[str, float] = {}
-        valid_aucs = []
-
-        # for plotting / debugging: keep per-label arrays
-        per_label_y_true: Dict[str, np.ndarray] = {}
-        per_label_y_score: Dict[str, np.ndarray] = {}
-
-        # for each label build y_true and y_score across cases
-        for lbl in target_label_list:
-            y_true = []
-            y_score = []
-            for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
-                tgt_has = (lbl in tgt_list)   # True if label present in target for this case
-                pred_has = (lbl in pred_list) # True if label present in prediction for this case
-
-                # y_true: 1 if actual "deviation" (label present in target)
-                y_true.append(1 if tgt_has else 0)
-                # y_score: predicted probability/score for "deviation".
-                # binary prediction -> 1.0 for predicted dev, 0.0 otherwise
-                y_score.append(1.0 if pred_has else 0.0)
-
-            y_true_arr = np.array(y_true)
-            y_score_arr = np.array(y_score)
-
-            # store arrays for plotting
-            per_label_y_true[lbl] = y_true_arr
-            per_label_y_score[lbl] = y_score_arr
-
-            # If y_true contains only a single class, AUC is undefined
-            if np.unique(y_true_arr).size < 2:
-                auc_per_label[lbl] = float('nan')
-                continue
-
-            try:
-                auc = float(roc_auc_score(y_true_arr, y_score_arr))
-            except Exception:
-                # defensive: if something else goes wrong, mark as nan
-                auc = float('nan')
-
-            auc_per_label[lbl] = auc
-            if not np.isnan(auc):
-                valid_aucs.append(auc)
-
-        # macro: mean over labels with valid AUCs. If none valid, return nan.
-        macro_auc = float(np.mean(valid_aucs)) if valid_aucs else float('nan')
-
-        # plotting: pass full per-label dicts (method should accept these)
-        if plot and hasattr(self, "_{}_plot_roc_per_label".format("__") ) is False:
-            # if your plotting helper is named __plot_roc_per_label as before:
-            try:
-                self.__plot_roc_per_label(per_label_y_true=per_label_y_true, per_label_y_score=per_label_y_score)
-            except Exception:
-                # swallow plotting errors so metric computation is unaffected
-                pass
-
-        return macro_auc, auc_per_label
-
-    def __plot_roc_per_label(self, per_label_y_true: dict, per_label_y_score: dict, labels=None):
-        """
-        Plot ROC curves for multiple labels.
-        Args:
-        per_label_y_true: dict[label] -> list of 0/1 target values per case
-        per_label_y_score: dict[label] -> list of predicted scores per case
-        labels: list of labels to plot (default: all in per_label_y_true)
-        """
-        if labels is None:
-            labels = sorted(per_label_y_true.keys())
-        
-        plt.figure(figsize=(10, 8))
-        
-        for lbl in labels:
-            y_true = np.array(per_label_y_true[lbl])
-            y_score = np.array(per_label_y_score[lbl])
-            
-            # Skip labels with no positive or no negative examples (ROC AUC undefined)
-            if y_true.sum() == 0 or y_true.sum() == len(y_true):
-                print(f"Skipping label {lbl}: ROC undefined (only one class present)")
-                continue
-            
-            fpr, tpr, thresholds = roc_curve(y_true, y_score)
-            roc_auc = auc(fpr, tpr)
-            plt.plot(fpr, tpr, lw=2, label=f"{lbl} (AUC = {roc_auc:.2f})")
-        
-        plt.plot([0, 1], [0, 1], color='navy', lw=1, linestyle='--')  # diagonal
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel("False Positive Rate", fontsize=12)
-        plt.ylabel("True Positive Rate", fontsize=12)
-        plt.title("ROC Curves per Label", fontsize=14)
-        plt.legend(loc="lower right")
-        plt.grid(True)
-        plt.show()
-        
-    def plot_macro_roc_auc(self, figsize=(8, 6)):
-        pred_lists = [dr.get("pred_deviations", []) for dr in self.deviation_results]
-        tgt_lists = [dr.get("tgt_deviations", []) for dr in self.deviation_results]
-
-        total_tgt = defaultdict(int)
-        for tgt in tgt_lists:
-            for lbl in tgt:
-                total_tgt[lbl] += 1
-
-        label_names = sorted(k for k, v in total_tgt.items() if v > 0)
-        if not label_names:
-            return {"per_label_auc": [], "macro_auc": float("nan")}
-
-        label_to_idx = {lbl: idx for idx, lbl in enumerate(label_names)}
-        num_cases = len(tgt_lists)
-        num_labels = len(label_names)
-
-        y_true = [[0] * num_labels for _ in range(num_cases)]
-        y_scores = [[0] * num_labels for _ in range(num_cases)]
-
-        for row, (pred, tgt) in enumerate(zip(pred_lists, tgt_lists)):
-            for lbl in tgt:
-                if lbl in label_to_idx:
-                    y_true[row][label_to_idx[lbl]] = 1
-            for lbl in pred:
-                if lbl in label_to_idx:
-                    y_scores[row][label_to_idx[lbl]] = 1
-
-        per_label_auc = [float("nan")] * num_labels
-        plt.figure(figsize=figsize)
-        ax = plt.gca()
-
-        valid_indices = []
-        for idx, lbl in enumerate(label_names):
-            column_true = [case[idx] for case in y_true]
-            if len(set(column_true)) < 2:
-                continue
-            column_scores = [case[idx] for case in y_scores]
-            fpr, tpr, _ = roc_curve(column_true, column_scores)
-            roc_auc = auc(fpr, tpr)
-            per_label_auc[idx] = roc_auc
-            valid_indices.append(idx)
-            ax.plot(fpr, tpr, lw=1.5, label=f"{lbl} (AUC={roc_auc:.3f})")
-
-        ax.plot([0, 1], [0, 1], "k--", label="Chance")
-        ax.set_xlabel("False Positive Rate")
-        ax.set_ylabel("True Positive Rate")
-        ax.set_title("ROC Curves per Deviation Label")
-        ax.legend(loc="lower right", fontsize="small")
-        plt.show()
-
-        macro_auc = float(
-            sum(per_label_auc[i] for i in valid_indices) / len(valid_indices)
-        ) if valid_indices else float("nan")
-
-        return {"per_label_auc": per_label_auc, "macro_auc": macro_auc}
-    
     # Sequence evaluation: Evaluate the place of occurence of deviation in suffix
     def get_suffix_devs(self):
         # Get the deviation values for which a deviation occured: 
-        real_deviations = [{'tgt_deviations':dr.get('tgt_deviations', []),
-                            'pred_deviations':dr.get('pred_deviations', []),
-                            'tgt_suffix': dr.get('tgt_suffix', []),
+        real_deviations = [{'tgt_suffix': dr.get('tgt_suffix', []),
                             'pred_suffix': dr.get('pred_suffix', []),
-                            'pred_deviations': dr.get('pred_deviations', [])} for dr in self.deviation_results if len(dr.get('tgt_deviations', [])) > 0]
-        
+                            # alignments
+                            'tgt_aligns':dr.get('tgt_cleaned_aligns', []),
+                            'pred_aligns':dr.get('pred_cleaned_aligns', [])} for dr in self.deviation_results if len(dr.get('tgt_deviations', [])) > 0]
+                
         # Target deviation and suffix
         real_tgt_devs = [dr.get('tgt_deviations', []) for dr in real_deviations]
+        
         real_tgt_suffixes = [dr.get('tgt_suffix', []) for dr in real_deviations]
         
         # Predicted deviation and suffix (100 elements per list)
         real_pred_devs = [dr.get('pred_deviations', []) for dr in real_deviations]
+        
         real_pred_suffix_samples = [dr.get('pred_suffix', []) for dr in real_deviations]
         
         assert len(real_tgt_devs) == len(real_tgt_suffixes) == len(real_pred_devs) ==  len(real_pred_suffix_samples)
@@ -415,11 +236,6 @@ class DeviationEvaluation:
             pred_suff_dev_pos.append(pred_p)  
         
         return tgt_suff_dev_pos, pred_suff_dev_pos, real_tgt_suffixes, real_pred_suffix_samples
-    
-    def _all_indices(self, lst, x):
-        """Return all indices of x in lst, or [0] if not found."""
-        indices = [i for i, val in enumerate(lst) if val == x]
-        return indices if indices else [0]
     
     def likelihood_at_target_positions(self,
                                        tgt_suff_dev_poss: List[Dict[str, List[int]]],
