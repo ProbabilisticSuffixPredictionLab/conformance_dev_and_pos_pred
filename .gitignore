@@ -222,8 +222,8 @@ src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_prepa
 src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/separate/labelled_prefix_deviations/*
 src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/separate/*.csv
 
-
-
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/training/**/collective/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/training/**/separate/*.pkl
 
 # Do not add the content of the results folder
 results/*

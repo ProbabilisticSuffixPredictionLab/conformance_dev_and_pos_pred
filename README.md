@@ -1,4 +1,8 @@
-# Online Conformance Checking & Alignment of Probabilistic Suffix Prediction: Development Repository
+# Predicting Conformance Deviations and Their Positions in Future Event Sequences
+
+This repository contains the implementation of the framework for predicting conformance deviations and their positions in future event sequences using probabilistic suffix prediction. The framework is designed to analyze event logs and predict potential deviations in process executions.
+
+It utilizies the models from probabilistic suffix prediction: https://github.com/ProbabilisticSuffixPredictionLab/Probabilistic_Suffix_Prediction_U-ED-LSTM_pub
 
 ## Setting Up the Python Environment with Pipenv
 
@@ -35,7 +39,15 @@ Make sure you have Python and Pipenv installed.
     pipenv shell
     ```
 
-5. **Run the Project**: You can now run the project within the virtual environment. Execute a Juyter notebook.
+5. **Data**:
+- Download the datasets from the links mentioned in the paper and place them in the `data` folder.
+- Adjust all paths in the Jupyter notebooks accordingly.
 
+6. **Proabbilistic Suffix Prediction Model**:
+- Clone the Probabilistic Suffix Prediction repository from https://github.com/ProbabilisticSuffixPredictionLab/Probabilistic_Suffix_Prediction_U-ED-LSTM_pub
+- Follow the setup instructions in that repository to install any additional dependencies required for the model.
 
-## Run the Online Conformance Checking of Probabilistic Suffix Prediction Framework
+5. **Run the Project**: You can now run the project within the virtual environment. 
+
+- To reproduce the results, execute the Juyter notebooks.
+- The Helpdesk folders contia all files created after executiong as examples.
