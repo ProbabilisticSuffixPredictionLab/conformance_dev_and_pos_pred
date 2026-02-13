@@ -4,7 +4,6 @@ from typing import List, Dict, Tuple, Set, Any, Union
 import pandas as pd
 import numpy as np
 from tqdm import trange
-import re
 import pm4py
 from pm4py.objects.conversion.log import converter as log_converter
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -13,7 +12,6 @@ import torch
 from torch.utils.data import Dataset
 from torch.utils.data import TensorDataset
 from torch.serialization import add_safe_globals
-
 
 class DeviationLabeling:
     def __init__(self, log_name: str, path_event_log: str, path_process_model: str, label_strategy: str = 'collective'):
