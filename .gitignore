@@ -215,17 +215,33 @@ data/encoded_data
 data/prob_suffix_pred_models
 data/resulting_lists_leg
 
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/collective/*.pkl
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/collective/*.csv
+# FFN
 
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/separate/*.pkl
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/separate/*.csv
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/data_preparation/**/collective/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/data_preparation/**/collective/*.csv
 
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/separate/labelled_prefix_deviations/*
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/data_preparation/**/separate/*.csv
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/data_preparation/**/separate/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/data_preparation/**/separate/*.csv
 
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/training/**/collective/*.pkl
-src/reimplemented_approaches/proactive_conformance_checking/notebooks/training/**/separate/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/data_preparation/**/separate/labelled_prefix_deviations/*
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/data_preparation/**/separate/*.csv
+
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/training/**/collective/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/FFN/training/**/separate/*.pkl
+
+# LSTM
+
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/data_preparation/**/collective/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/data_preparation/**/collective/*.csv
+
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/data_preparation/**/separate/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/data_preparation/**/separate/*.csv
+
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/data_preparation/**/separate/labelled_prefix_deviations/*
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LST;/data_preparation/**/separate/*.csv
+
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/training/**/collective/*.pkl
+src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/training/**/separate/*.pkl
 
 # Do not add the content of the results folder
 results/*

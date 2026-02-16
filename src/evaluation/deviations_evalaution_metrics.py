@@ -1,12 +1,21 @@
-from collections import Counter, defaultdict
-from typing import Optional, Iterable, Dict, List, Tuple, Union, Any
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
-from matplotlib.offsetbox import TextArea, HPacker, VPacker, AnchoredOffsetbox
+"""
+
+"""
+from __future__ import annotations
 import pickle
 from pathlib import Path
+import numpy as np
 import textwrap
+from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional, Tuple, Union, Iterable
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
+import textwrap
+from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea, VPacker
+from matplotlib.ticker import MaxNLocator
+
 
 def load_results(path: Union[str, Path]) -> dict:
     with Path(path).open("rb") as f:
@@ -335,6 +344,13 @@ class DeviationEvaluation:
 
         return case_level, per_label_mean, weighted_macro, per_label_hitprob, weighted_macro_hitprob
 
+
+
+
+
+
+
+
     def plot_suffix_deviation_distribution(
         self,
         suffix_index: int,
@@ -346,47 +362,38 @@ class DeviationEvaluation:
         pred_suff_sets=None,
         tgt_suffixes=None,
         num_samples: int = 100,
-        figsize=(12, 8),
-        dpi: int = 180,
+        figsize=(12, 5),
+        dpi: int = 220,
         style: str = "paper",   # "paper" | "dense" | "auto"
-    ) -> None:
-        import matplotlib.pyplot as plt
-        from matplotlib.ticker import FuncFormatter
-        from collections import Counter, defaultdict
-        from matplotlib.offsetbox import TextArea, HPacker, VPacker, AnchoredOffsetbox
-
+        show: bool = True,
+        return_objects: bool = False,
+    ):
         if not (0 <= suffix_index < len(tgt_suff_move)):
             raise IndexError("suffix_index out of range.")
 
         cases = self._cases_with_target_deviations()
-        prefix = (cases[suffix_index].get("prefix") or []) if suffix_index < len(cases) else []
+        case = cases[suffix_index] if suffix_index < len(cases) else {}
+
+        prefix = case.get("prefix") or []
         if tgt_suffixes is None:
             tgt_suffixes = [(c.get("tgt_suffix") or []) for c in cases]
         tgt_suffix = tgt_suffixes[suffix_index] if suffix_index < len(tgt_suffixes) else []
+
         samples_case = pred_suffix_samples[suffix_index] if suffix_index < len(pred_suffix_samples) else []
         sets_case = (pred_suff_sets[suffix_index] if (pred_suff_sets and suffix_index < len(pred_suff_sets)) else None)
 
         is_log = (move == "log")
         denom_req = max(1, int(num_samples))
-        highlight_tok = label if is_log else None
+        highlight_tok = str(label) if is_log else None
 
-        # ---------- style presets ----------
-        PAPER = dict(
-            fs_title=15, fs_h=12, fs_t=11, fs_small=10,
-            max_chars=112, max_chars_s=110,
-            max_ev_prefix=26, max_ev_suffix=34, max_ev_sample=38,
-            LINE=0.085, GAP_S=0.022, GAP_M=0.040,
-            fig_adj=dict(left=0.055, right=0.99, top=0.92, bottom=0.07),
-            hspace=0.10,
-        )
-        DENSE = dict(
-            fs_title=14, fs_h=11, fs_t=10, fs_small=9,
-            max_chars=130, max_chars_s=126,
-            max_ev_prefix=32, max_ev_suffix=42, max_ev_sample=46,
-            LINE=0.075, GAP_S=0.018, GAP_M=0.033,
-            fig_adj=dict(left=0.05, right=0.995, top=0.92, bottom=0.065),
-            hspace=0.09,
-        )
+        PAPER = dict(fs_title=13.5, fs_h=11, fs_t=10, fs_s=9,
+                    max_chars=92, max_chars_s=88,
+                    max_ev_prefix=26, max_ev_suffix=34, max_ev_sample=38,
+                    gap_h=0.030, gap_b=0.020)
+        DENSE = dict(fs_title=13, fs_h=10, fs_t=9, fs_s=8,
+                    max_chars=108, max_chars_s=102,
+                    max_ev_prefix=32, max_ev_suffix=42, max_ev_sample=46,
+                    gap_h=0.024, gap_b=0.017)
 
         if style not in {"paper", "dense", "auto"}:
             style = "paper"
@@ -396,10 +403,14 @@ class DeviationEvaluation:
         else:
             cfg = PAPER if style == "paper" else DENSE
 
-        fs_title, fs_h, fs_t, fs_small = cfg["fs_title"], cfg["fs_h"], cfg["fs_t"], cfg["fs_small"]
-        LINE, GAP_S, GAP_M = cfg["LINE"], cfg["GAP_S"], cfg["GAP_M"]
+        fs_title, fs_h, fs_t, fs_s = cfg["fs_title"], cfg["fs_h"], cfg["fs_t"], cfg["fs_s"]
+        GAP_H, GAP_B = cfg["gap_h"], cfg["gap_b"]
 
         # ---------- helpers ----------
+        def _wrap(s: str, w: int) -> str:
+            s = str(s)
+            return s if len(s) <= w else "\n".join(textwrap.wrap(s, width=w, break_long_words=False, break_on_hyphens=False))
+
         def _clip(tokens, n, tail=False):
             t = [str(x) for x in (tokens or [])]
             if len(t) <= n:
@@ -421,30 +432,40 @@ class DeviationEvaluation:
                 out.append(cur)
             return out or [["(empty)"]]
 
-        def _draw_tokens(ax, x, y_top, tokens, *, max_events, max_chars, tail=False, fontsize=11, hi=None):
-            base, hi_c = "black", "tab:orange"
+        def _draw_tokens(ax, x, y_top, tokens, *, max_events, max_chars, tail=False, fontsize=10, hi=None, accent="tab:orange"):
+            base = "black"
             lines = _token_lines(tokens, max_events=max_events, max_chars=max_chars, tail=tail)
+
             v = []
             for ln in lines:
                 h = []
                 for j, tok in enumerate(ln):
                     if j:
                         h.append(TextArea(" → ", textprops={"fontsize": fontsize, "color": base}))
-                    col = hi_c if (hi is not None and tok == str(hi)) else base
+                    col = accent if (hi is not None and tok == str(hi)) else base
                     h.append(TextArea(tok, textprops={"fontsize": fontsize, "color": col}))
                 v.append(HPacker(children=h, align="baseline", pad=0, sep=0))
+
             box = VPacker(children=v, align="left", pad=0, sep=2)
-            ax.add_artist(
-                AnchoredOffsetbox(
-                    loc="upper left",
-                    child=box,
-                    frameon=False,
-                    bbox_to_anchor=(x, y_top),
-                    bbox_transform=ax.transAxes,
-                    borderpad=0.0,
-                )
+            abox = AnchoredOffsetbox(
+                loc="upper left",
+                child=box,
+                frameon=False,
+                bbox_to_anchor=(x, y_top),
+                bbox_transform=ax.transAxes,
+                borderpad=0.0,
             )
-            return y_top - LINE * max(1, len(lines))
+            abox.set_clip_on(True)
+            abox.set_clip_path(ax.patch)
+            ax.add_artist(abox)
+            return abox
+
+        def _after_artist(fig, ax, artist, gap_axes: float) -> float:
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            bbox = artist.get_window_extent(renderer=renderer)
+            y0 = ax.transAxes.inverted().transform((bbox.x0, bbox.y0))[1]
+            return y0 - gap_axes
 
         def _topk_at_pos(samples, pos, token, k=2):
             if not samples:
@@ -452,10 +473,8 @@ class DeviationEvaluation:
             ctr = Counter(tuple(s) for s in samples if s and len(s) > pos and str(s[pos]) == str(token))
             return [(c, c / denom_req, list(seq)) for seq, c in ctr.most_common(k)]
 
-        true_pos = sorted({int(p) for p in (tgt_suff_move[suffix_index].get(label) or [])})
-
-        # ---------- per-position probabilities ----------
-        counts_dict = dict((pred_suff_move[suffix_index].get(label) or {}))
+        true_pos = sorted({int(p) for p in ((tgt_suff_move[suffix_index] or {}).get(label) or [])})
+        counts_dict = dict(((pred_suff_move[suffix_index] or {}).get(label) or {}))
 
         def _rate_from_sets(label_sets):
             pos_counts = defaultdict(int)
@@ -484,139 +503,168 @@ class DeviationEvaluation:
         else:
             positions, probs, counts_shown, denom_shown = [], [], {}, denom_req
 
-        # ---------- estimate needed text height (to avoid blank space) ----------
-        def _nlines_context():
-            return (
-                1
-                + len(_token_lines(prefix, max_events=cfg["max_ev_prefix"], max_chars=cfg["max_chars"], tail=True))
-                + 1
-                + len(_token_lines(tgt_suffix, max_events=cfg["max_ev_suffix"], max_chars=cfg["max_chars"], tail=False))
+        # ---------- seaborn “camera-ready” theme (local) ----------
+        palette = sns.color_palette("colorblind")
+        bar_color, accent = palette[0], palette[1]
+
+        rc = {
+            "font.family": "DejaVu Sans",
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.linewidth": 1.0,
+            "xtick.major.size": 4,
+            "ytick.major.size": 4,
+            "xtick.major.width": 1.0,
+            "ytick.major.width": 1.0,
+            "grid.linestyle": ":",
+            "grid.alpha": 0.22,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+        ctx = "paper" if style != "dense" else "notebook"
+        font_scale = 1.06 if style == "paper" else 0.95
+
+        with sns.axes_style("ticks", rc=rc), sns.plotting_context(ctx, font_scale=font_scale, rc=rc):
+            # deterministic layout (avoid constrained_layout quirks with offsetboxes)
+            fig = plt.figure(figsize=figsize, dpi=dpi, constrained_layout=False)
+            fig.subplots_adjust(left=0.035, right=0.99, top=0.89, bottom=0.12, wspace=0.10)
+
+            gs = fig.add_gridspec(1, 2, width_ratios=[1.32, 1.0])
+
+            ax_txt = fig.add_subplot(gs[0, 0])
+            ax_prob = fig.add_subplot(gs[0, 1])
+
+            # shrink + lift the bar axis -> visually “shorter” plot and better balance
+            shrink = 0.70 if (len(true_pos) <= 1 and len(prefix) <= 2) else 0.78
+            lift   = 0.14 if shrink < 0.78 else 0.10
+            p = ax_prob.get_position()
+            ax_prob.set_position([p.x0, p.y0 + p.height * lift, p.width, p.height * shrink])
+
+            title_move = "log" if is_log else "model"
+            fig.suptitle(
+                f"Deviation position distribution — label='{label}', move='{title_move}'",
+                fontsize=fs_title,
+                fontweight="bold",
+                y=0.965,
             )
 
-        def _nlines_samples():
+            # ---------- left text panel ----------
+            ax_txt.axis("off")
+            ax_txt.set_xlim(0, 1)
+            ax_txt.set_ylim(0, 1)
+
+            X, y = 0.01, 0.985  # tiny padding looks better than flush-left
+
+            def add_header(text: str, y: float) -> float:
+                t = ax_txt.text(X, y, _wrap(text, cfg["max_chars"]),
+                                ha="left", va="top", fontsize=fs_h, fontweight="bold", clip_on=True)
+                return _after_artist(fig, ax_txt, t, GAP_H)
+
+            def add_tokens(tokens, y: float, *, max_events, max_chars, tail=False, hi=None) -> float:
+                ab = _draw_tokens(ax_txt, X, y, tokens,
+                                max_events=max_events, max_chars=max_chars,
+                                tail=tail, fontsize=fs_t, hi=hi, accent=accent)
+                return _after_artist(fig, ax_txt, ab, GAP_B)
+
+            y = add_header(f"Prefix (len={len(prefix)})", y)
+            y = add_tokens(prefix, y, max_events=cfg["max_ev_prefix"], max_chars=cfg["max_chars"], tail=True, hi=None)
+            y -= GAP_B * 0.20
+
+            dev_str = ", ".join(map(str, true_pos)) if true_pos else "(none)"
+            y = add_header(f"Target suffix (len={len(tgt_suffix)}) — deviating positions: {dev_str}", y)
+            y = add_tokens(tgt_suffix, y, max_events=cfg["max_ev_suffix"], max_chars=cfg["max_chars"],
+                        tail=False, hi=highlight_tok)
+            y -= GAP_B * 0.20
+
+            y = add_header("Top sampled suffix sequences at deviating positions (top 2)", y)
+
             if not samples_case:
-                return 2
-            if not true_pos:
-                return 2
-            n = 1  # samples title
-            for p in true_pos:
-                n += 1
-                topk = _topk_at_pos(samples_case, p, label, k=2)
-                if not topk:
-                    n += 1
-                else:
-                    for _, _, seq in topk:
-                        n += 1
-                        n += len(_token_lines(seq, max_events=cfg["max_ev_sample"], max_chars=cfg["max_chars_s"], tail=False))
-            return n
+                t = ax_txt.text(X, y, "(no samples available)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
+                y = _after_artist(fig, ax_txt, t, GAP_B)
+            elif not true_pos:
+                t = ax_txt.text(X, y, "(no deviating positions for this label)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
+                y = _after_artist(fig, ax_txt, t, GAP_B)
+            else:
+                for p0 in true_pos:
+                    if y < 0.08:
+                        ax_txt.text(X, max(0.02, y), "(truncated to fit figure)",
+                                    ha="left", va="bottom", fontsize=fs_s, alpha=0.6, clip_on=True)
+                        break
 
-        need_lines = _nlines_context() + _nlines_samples()
-        # map "needed lines" -> text height ratio; tuned to remove unused whitespace
-        text_ratio = max(4, min(12, int(round(0.45 * need_lines))))
-        prob_ratio = 6
+                    y = add_header(f"Pos {p0}", y)
+                    topk = _topk_at_pos(samples_case, pos=p0, token=label, k=2)
 
-        # ---------- figure: ONE text axis + ONE bar axis ----------
-        fig = plt.figure(figsize=figsize, dpi=dpi)
-        gs = fig.add_gridspec(2, 1, height_ratios=[text_ratio, prob_ratio], hspace=cfg["hspace"])
-        ax_txt = fig.add_subplot(gs[0, 0])
-        ax_prob = fig.add_subplot(gs[1, 0])
-        fig.subplots_adjust(**cfg["fig_adj"])
+                    if not topk:
+                        t = ax_txt.text(X, y, "(none)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
+                        y = _after_artist(fig, ax_txt, t, GAP_B)
+                        continue
 
-        title_move = "Log move" if is_log else "Model move"
-        title_pair = f"('{label}', >>)" if is_log else f"(>>, '{label}')"
-        fig.suptitle(
-            f"Deviation position distribution — label='{label}' — {title_move} {title_pair}",
-            fontsize=fs_title, fontweight="bold", y=0.98
-        )
+                    for i, (c, frac, seq) in enumerate(topk, 1):
+                        t = ax_txt.text(X, y, f"{i}. {c}/{denom_req}  ({100*frac:.0f}%)",
+                                        ha="left", va="top", fontsize=fs_t, fontweight="bold", clip_on=True)
+                        y = _after_artist(fig, ax_txt, t, GAP_B * 0.65)
+                        y = add_tokens(seq, y, max_events=cfg["max_ev_sample"], max_chars=cfg["max_chars_s"],
+                                    tail=False, hi=highlight_tok)
+                    y -= GAP_B * 0.15
 
-        # --- TEXT PANEL (context + samples) ---
-        ax_txt.axis("off")
-        y = 0.985
+            # --- right bar panel (equal spacing) ---
+            ax_prob.set_title(f"Predicted rate of '{label}'", fontsize=fs_h, fontweight="bold", pad=3)
+            ax_prob.set_xlabel("Position (0-based)")
+            ax_prob.set_ylabel("Rate")
+            ax_prob.yaxis.set_major_formatter(PercentFormatter(1.0))
+            ax_prob.yaxis.set_major_locator(MaxNLocator(6))
+            ax_prob.grid(axis="y", linestyle=":", alpha=0.22)
+            ax_prob.grid(axis="x", visible=False)
 
-        ax_txt.text(0.0, y, f"Prefix (len={len(prefix)})", ha="left", va="top", fontsize=fs_h, fontweight="bold")
-        y -= GAP_M
-        y = _draw_tokens(ax_txt, 0.0, y, prefix,
-                        max_events=cfg["max_ev_prefix"], max_chars=cfg["max_chars"],
-                        tail=True, fontsize=fs_t, hi=None)
-        y -= GAP_M
+            if positions:
+                pos_vals = list(map(int, positions))
+                xs = list(range(len(pos_vals)))             # equally spaced bar locations
 
-        dev_str = ", ".join(map(str, true_pos)) if true_pos else "(none)"
-        ax_txt.text(0.0, y,
-                    f"Target suffix (len={len(tgt_suffix)}) — deviating positions for '{label}': {dev_str}",
-                    ha="left", va="top", fontsize=fs_h, fontweight="bold")
-        y -= GAP_M
-        y = _draw_tokens(ax_txt, 0.0, y, tgt_suffix,
-                        max_events=cfg["max_ev_suffix"], max_chars=cfg["max_chars"],
-                        tail=False, fontsize=fs_t, hi=highlight_tok)
-        y -= (GAP_M * 1.1)
+                bars = ax_prob.bar(xs, probs, color=bar_color, edgecolor="0.25", linewidth=0.8, width=0.78, zorder=3)
+                ax_prob.set_xticks(xs)
+                ax_prob.set_xticklabels([str(p) for p in pos_vals])
 
-        ax_txt.text(0.0, y,
-                    "Top sampled suffix sequences at deviating positions (top 2)",
-                    ha="left", va="top", fontsize=fs_h + 1, fontweight="bold")
-        y -= (GAP_M * 1.05)
+                # True deviating positions -> map to categorical index
+                pos_to_x = {p: i for i, p in enumerate(pos_vals)}
+                for tp in true_pos:
+                    if tp in pos_to_x:
+                        ax_prob.axvline(pos_to_x[tp], linestyle="--", linewidth=1.1, color=accent, alpha=0.9, zorder=2)
 
-        if not samples_case:
-            ax_txt.text(0.0, y, "(no samples available)", ha="left", va="top", fontsize=fs_h)
-        elif not true_pos:
-            ax_txt.text(0.0, y, "(no deviating positions for this label)", ha="left", va="top", fontsize=fs_h)
-        else:
-            for p in true_pos:
-                ax_txt.text(0.0, y, f"Pos {p}:", ha="left", va="top", fontsize=fs_h, fontweight="bold")
-                y -= GAP_M
+                ymax = max(probs) if probs else 0.0
+                ax_prob.set_ylim(0, min(1.0, max(0.10, ymax * 1.18)))
+                ax_prob.set_xlim(-0.6, len(xs) - 0.4)
 
-                topk = _topk_at_pos(samples_case, pos=p, token=label, k=2)
-                if not topk:
-                    ax_txt.text(0.0, y, "(none)", ha="left", va="top", fontsize=fs_t)
-                    y -= GAP_M
-                    continue
+                # Count labels with subtle white background (prevents collisions)
+                for b, p in zip(bars, pos_vals):
+                    c = int(counts_shown.get(int(p), 0))
+                    ax_prob.text(
+                        b.get_x() + b.get_width() / 2,
+                        b.get_height() + 0.004,
+                        f"{c}/{denom_shown}",
+                        ha="center", va="bottom",
+                        fontsize=fs_s, alpha=0.9,
+                        bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
+                        zorder=4,
+                    )
+            else:
+                ax_prob.text(0.5, 0.5, "(no predicted occurrences)", ha="center", va="center", fontsize=fs_h)
+                ax_prob.set_xticks([]); ax_prob.set_yticks([])
 
-                for i, (c, frac, seq) in enumerate(topk, 1):
-                    ax_txt.text(0.0, y, f"{i}. {c}/{denom_req}: {100*frac:.0f}%",
-                                ha="left", va="top", fontsize=fs_h, fontweight="bold")
-                    y = _draw_tokens(ax_txt, 0.18, y, seq,
-                                    max_events=cfg["max_ev_sample"], max_chars=cfg["max_chars_s"],
-                                    tail=False, fontsize=fs_t, hi=highlight_tok)
-                    y -= GAP_S
-                y -= GAP_S
+            sns.despine(ax=ax_prob)
 
-        # --- BAR PANEL ---
-        ax_prob.set_title("Predicted position rate", fontsize=fs_h + 1, fontweight="bold", pad=8)
-        ax_prob.set_xlabel("Position (0-based)", fontsize=fs_h)
-        ax_prob.set_ylabel(f"Fraction of samples with '{label}'", fontsize=fs_h)
-        ax_prob.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{100*v:.0f}%"))
-        ax_prob.grid(axis="y", linestyle=":", alpha=0.35)
-        ax_prob.tick_params(axis="both", labelsize=fs_t)
+            if show:
+                plt.show()
 
-        if positions:
-            bars = ax_prob.bar(positions, probs, linewidth=1.0, edgecolor="black")
-            xt = sorted({int(p) for p in positions})
-            ax_prob.set_xticks(xt)
-            ax_prob.set_xticklabels([str(p) for p in xt])
-
-            for b, p in zip(bars, positions):
-                c = int(counts_shown.get(int(p), 0))
-                ax_prob.text(
-                    b.get_x() + b.get_width() / 2,
-                    b.get_height(),
-                    f"{c}/{denom_shown}",
-                    ha="center", va="bottom", fontsize=fs_small
-                )
-
-            for tp in true_pos:
-                ax_prob.axvline(tp, linestyle="--", linewidth=1.2)
-
-            ymax = max(probs) if probs else 1.0
-            ax_prob.set_ylim(0, (ymax * 1.25) if ymax > 0 else 1.0)
-        else:
-            ax_prob.text(0.5, 0.5, "(no predicted occurrences for this label)",
-                        ha="center", va="center", fontsize=fs_h)
-            ax_prob.set_xticks([])
-            ax_prob.set_yticks([])
-
-        plt.show()
+            if return_objects:
+                return fig, (ax_txt, ax_prob)
+            return None
 
 
-        
+
+
+
+
+
 # -----------------------
 # helpers for robust (sequence-index) deviation positions
 # -----------------------

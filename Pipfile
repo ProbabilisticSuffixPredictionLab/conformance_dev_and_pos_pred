@@ -18,10 +18,10 @@ tensorboard = "*"
 standard-imghdr = "*"
 pyxdameraulevenshtein = "*"
 crps = "*"
+seaborn = "*"
 
 [dev-packages]
 torch-tb-profiler = "*"
 
 [requires]
 python_version = "3.12"
-
