@@ -5,7 +5,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import joblib
-import math
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
@@ -16,23 +15,24 @@ import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
                
 class DataFrameConstruction:
+    """
+    Create dataframe for risk or safe classification.
+    """
     def __init__(self, conformance_results: dict):
         self.res_target_conf = conformance_results['target_conformance']
-        # self.res_target_conf_fit = [res['fitness'] for res in self.res_target_conf]
         self.res_target_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_target_conf]
 
         self.res_ml_conf = conformance_results['ml_conformance']
-        # self.res_ml_conf_fit =  [res['fitness'] for res in self.res_ml_conf]
         self.res_ml_conf_suffix_fit = [res['suffix_fitness'] for res in self.res_ml_conf]
 
         self.res_smpl_conf = conformance_results['samples_conformance']
-        # self.res_smpl_conf_fit = [[r['fitness'] for r in res] for res in self.res_smpl_conf]
         self.res_smpl_conf_suffix_fit = [[r['suffix_fitness'] for r in res] for res in self.res_smpl_conf]
         
-    def __aggregate_samples_fitness(self, samples_fitness: np.ndarray, aggregation: str) -> float:
+    def __aggregate_samples_fitness(self, samples_fitness: np.ndarray, aggregation: str) -> Tuple[float, float]:
         """
         Helper method to aggregate the samples using various moment metrics.
         """
+        samples_fitness = np.asarray(samples_fitness, dtype=float)
         if samples_fitness.size == 0:
             raise ValueError("samples_fitness must not be empty")
         
@@ -45,13 +45,25 @@ class DataFrameConstruction:
         elif aggregation == 'max':
             agg = float(np.max(samples_fitness))
         elif aggregation == 'variance':
-            agg = float(np.var(samples_fitness, ddof=1))  # sample variance
+            ddof = 1 if samples_fitness.size > 1 else 0
+            agg = float(np.var(samples_fitness, ddof=ddof))
         elif aggregation == 'std':
-            agg = float(np.std(samples_fitness, ddof=1))  # sample standard deviation
+            ddof = 1 if samples_fitness.size > 1 else 0
+            agg = float(np.std(samples_fitness, ddof=ddof))
         elif aggregation == 'skewness':
-            agg = float((np.mean((samples_fitness - np.mean(samples_fitness))**3)) / (np.std(samples_fitness, ddof=1)**3))
+            std = float(np.std(samples_fitness, ddof=1) if samples_fitness.size > 1 else 0.0)
+            if std == 0.0:
+                agg = 0.0
+            else:
+                mu = float(np.mean(samples_fitness))
+                agg = float((np.mean((samples_fitness - mu) ** 3)) / (std ** 3))
         elif aggregation == 'kurtosis':
-            agg = float((np.mean((samples_fitness - np.mean(samples_fitness))**4)) / (np.std(samples_fitness, ddof=1)**4) - 3)
+            std = float(np.std(samples_fitness, ddof=1) if samples_fitness.size > 1 else 0.0)
+            if std == 0.0:
+                agg = -3.0
+            else:
+                mu = float(np.mean(samples_fitness))
+                agg = float((np.mean((samples_fitness - mu) ** 4)) / (std ** 4) - 3.0)
         else:
             raise ValueError(f"Unsupported aggregation: {aggregation}")
         
@@ -64,26 +76,25 @@ class DataFrameConstruction:
         """
         Given an unsorted list of floats, return the lower-tail empirical values at q_risk and q_highrisk.
         """
-        sorted_vals = sorted(values)  # ascending, smallest is the worst fitness
-        n = len(sorted_vals)
+        if not (0.0 <= alpha_risk <= 1.0):
+            raise ValueError("alpha_risk must be in [0,1]")
 
-        if n <= 0:
-            return -1
-        
-        k_risk = math.floor((n + 1) * alpha_risk)
-        idx_risk = k_risk - 1
-        idx_risk = min(max(idx_risk, 0), n - 1)
-        q_risk = sorted_vals[idx_risk] if idx_risk != -1 else None
-        
+        arr = np.asarray(values, dtype=float)
+        if arr.size == 0:
+            return {'q_risk': None}
+
+        # Conservative lower-tail quantile for thresholding.
+        try:
+            q_risk = float(np.quantile(arr, alpha_risk, method="lower"))
+        except TypeError:
+            q_risk = float(np.quantile(arr, alpha_risk))
+
         return {'q_risk': q_risk}
     
     def empirical_quantile_thresholds(self, alpha_risk: float, aggregation: str='mean') -> dict:
         """
         Compute one-sided lower-tail empirical thresholds for q_risk and q_highrisk.
         """
-        
-        # Extend the dict with high-risk if needed
-        
         # Target (suffix)
         target_fitness_scores = self.res_target_conf_suffix_fit
         # Get thresholds
@@ -109,7 +120,13 @@ class DataFrameConstruction:
                 'samples': thresholds_sampled}
         
         
-    def samples_to_dataframe(self, q_risk: float = 0.0, target_col: str = "y"):
+    def samples_to_dataframe(self,
+                             q_risk: float = 0.0,
+                             target_col: str = "y",
+                             include_tail_features: bool = False):
+        """
+        Create dataframe for logistic model training, and predictions
+        """
         # Target suffix fitness scores
         targets = self.res_target_conf_suffix_fit
         # Predicted samples fitness scores
@@ -138,16 +155,34 @@ class DataFrameConstruction:
             cm4 = float(np.mean((arr - mean) ** 4))
             skew = (cm3 / (cm2 ** 1.5)) if cm2 > 0 else 0.0
             kurt = ((cm4 / (cm2 ** 2)) - 3.0) if cm2 > 0 else -3.0
-            rows.append([mean, var, std, skew, kurt, median, mn, mx, q25, q75, iqr])
-            # rows.append([mean, var, skew, kurt, median])
+            base = [mean, var, std, skew, kurt, median, mn, mx, q25, q75, iqr]
+
+            if include_tail_features:
+                q05 = float(np.percentile(arr, 5))
+                q10 = float(np.percentile(arr, 10))
+                q90 = float(np.percentile(arr, 90))
+                q95 = float(np.percentile(arr, 95))
+
+                below = arr[arr < q_risk]
+                p_below = float(below.size / arr.size)
+                mean_below = float(np.mean(below)) if below.size > 0 else float(q_risk)
+                shortfall = float(max(0.0, q_risk - mean_below))
+                base.extend([q05, q10, q90, q95, p_below, mean_below, shortfall])
+
+            rows.append(base)
 
         columns = ['mean','variance','std','skewness','kurtosis_excess','median','min','max','q25','q75','iqr']
-        # columns = ['mean','variance','skewness','kurtosis_excess','median']
+        if include_tail_features:
+            columns.extend(['q05','q10','q90','q95','p_below_qrisk','mean_below_qrisk','shortfall_below_qrisk'])
         df = pd.DataFrame(rows, columns=columns)
         df[target_col] = [1 if t >= q_risk else 0 for t in targets]
+        
         return df
     
 class ConformalAnalysisVisualizations:
+    """
+    Visulaize distribution of target and aggregated samples fitness scores.
+    """
     def __init__(self, sampled_fitness, target_fitness, ml_fitness):
         self.samples_fitness = sampled_fitness
         self.target_fitness = target_fitness
@@ -168,12 +203,11 @@ class ConformalAnalysisVisualizations:
         arr = np.asarray(samples_fitness, dtype=object)
 
         # helper map
-        agg_funcs = {
-            'mean': np.mean,
-            'median': np.median,
-            'min': np.min,
-            'max': np.max
-        }
+        agg_funcs = {'mean': np.mean,
+                     'median': np.median,
+                     'min': np.min,
+                     'max': np.max}
+        
         if aggregation not in agg_funcs:
             raise ValueError(f"Unsupported aggregation: {aggregation}")
         agg_f = agg_funcs[aggregation]
@@ -216,8 +250,8 @@ class ConformalAnalysisVisualizations:
                           show_kde=True,
                           alpha_risk: float = 1.0):
         """
-        1) Plot distribution of target fitness and of aggregated sample fitness and (optional).
-        2) Plot vertical lines for risk fitness score threshold based on alpha level.
+        1) Plot distribution of target fitness and (optional) aggregated sample fitness.
+        2) Plot vertical lines for risk fitness score threshold based on (empirical) alpha level.
         """
         # aggregate samples
         smpls_fit = None
@@ -323,34 +357,31 @@ class ConformalAnalysisVisualizations:
         return q_risk
 
 class LogisticRegressionModel:
+    """
+    Logistic regression model for predicting "safe" (1) vs "risk" (0).
+
+    This class is intentionally minimal: it supports
+    - fitting a scaled logistic regression (optionally probability-calibrated),
+    - calibrating a probability threshold using CP (conformal prediction) or CRC (risk control),
+    - predicting with that stored threshold,
+    - saving/loading.
+    """
     def __init__(self, 
                  alpha_quantile_risk: float = 0.5,
                  risk_fitness_threshold: float = 1.0,
                  classifier: Optional[LogisticRegression] = None):
-        # Risk fitness threshold (for reference, not used in fitting)
-        self.alpha_quantile_risk = alpha_quantile_risk
-        self.risk_fitness_threshold = risk_fitness_threshold
-        self.empiricial_risk_values: Dict[str, Any] = {'alpha_quantile_risk': alpha_quantile_risk, 'risk_fitness_threshold': risk_fitness_threshold}
-        
-        # Standard LR params:
-        self.classifier = classifier if classifier is not None else LogisticRegression(max_iter=1000, class_weight="balanced")
+        # Stored for provenance (not used in fitting):
+        self.alpha_quantile_risk = float(alpha_quantile_risk)
+        self.risk_fitness_threshold = float(risk_fitness_threshold)
+
+        self.classifier = classifier if classifier is not None else LogisticRegression(max_iter=1000,
+                                                                                       class_weight="balanced")
         self.pipeline = None
         self.feature_names: Optional[List[str]] = None
-        self.trained = False
+        self.trained: bool = False
 
-        # Calibration info using conformal prediction:
+        # Set by calibrate_crc_safe_threshold
         self.calibration_info: Dict[str, Any] = {}
-
-        self.metadata: Dict[str, Any] = {}
-
-    def get_calibration_info(self) -> Dict[str, Any]:
-        return dict(self.calibraiton)
-    
-    def get_feature_names(self) -> Optional[List[str]]:
-        return self.feature_names
-
-    def get_metadata(self) -> Dict[str, Any]:
-        return dict(self.metadata)
 
     def _build_pipeline(self, calibrate: bool):
         scaler = StandardScaler()
@@ -368,32 +399,22 @@ class LogisticRegressionModel:
             feature_names: Optional[List[str]] = None,
             calibrate: bool = False,
             **fit_kwargs) -> "LogisticRegressionModel":
-        """
-        Fit model. If X is numpy array, feature_names must be provided.
-        If X is DataFrame and feature_names provided, they must be subset of columns.
-        """
-        if isinstance(X, np.ndarray) and feature_names is None:
-            raise ValueError("Provide feature_names when X is numpy array.")
         if isinstance(X, pd.DataFrame):
-            if feature_names is None:
-                self.feature_names = list(X.columns)
-            else:
-                # validate supplied feature_names are present in dataframe
-                missing = [f for f in feature_names if f not in X.columns]
-                if missing:
-                    raise ValueError(f"Provided feature_names missing from X columns: {missing}")
-                self.feature_names = list(feature_names)
+            self.feature_names = list(X.columns) if feature_names is None else list(feature_names)
+            missing = [c for c in self.feature_names if c not in X.columns]
+            if missing:
+                raise ValueError(f"X is missing required features: {missing}")
+            X_fit = X[self.feature_names]
         else:
-            self.feature_names = feature_names
+            if feature_names is None:
+                raise ValueError("feature_names must be provided when X is a numpy array")
+            self.feature_names = list(feature_names)
+            X_fit = X
 
-        self._build_pipeline(calibrate)
-        # Pipeline is fit with X and y and contains scaler and classifier:
-        self.pipeline.fit(X, y, **fit_kwargs)
+        y_arr = np.asarray(y)
+        self._build_pipeline(calibrate=bool(calibrate))
+        self.pipeline.fit(X_fit, y_arr, **fit_kwargs)
         self.trained = True
-        self.metadata.update({
-            "n_features": len(self.feature_names) if self.feature_names is not None else None,
-            "calibrated": bool(calibrate),
-        })
         return self
 
     def fit_from_dataframe(self,
@@ -402,9 +423,6 @@ class LogisticRegressionModel:
                            features: Optional[List[str]] = None,
                            calibrate: bool = False,
                            **fit_kwargs) -> "LogisticRegressionModel":
-        """
-        Thin wrapper: extracts X and y from df and calls fit.
-        """
         if target_col not in df.columns:
             raise ValueError(f"target_col '{target_col}' not in dataframe")
         features = features or [c for c in df.columns if c != target_col]
@@ -412,7 +430,6 @@ class LogisticRegressionModel:
         y = df[target_col]
         return self.fit(X, y, feature_names=features, calibrate=calibrate, **fit_kwargs)
 
-    # Prediction
     def _ensure_feature_order(self, X: Union[pd.DataFrame, np.ndarray]):
         if isinstance(X, pd.DataFrame):
             if self.feature_names is None:
@@ -424,100 +441,152 @@ class LogisticRegressionModel:
         # numpy array: assume caller ensured correct column order
         return X
 
-
-    """
-    def calibrate_conformal_threshold(self,
-                                  X_cal: Union[np.ndarray, "pd.DataFrame"],
-                                  y_cal: Union[np.ndarray, "pd.Series"],
-                                  alpha: float = 0.05,
-                                  delta: float = 0.05,
-                                  n_grid: int = 100
-                                  ) -> Dict[str, Any]:
-        
-        # Conformal risk control calibration to ensure: P(Y=1 | p < lambda) <= alpha. p < lambda -> risk
-        # Finds lambda by grid search with a Hoeffding upper bound on the conditional risk.
-    
-        if not getattr(self, "trained", False):
-            raise RuntimeError("Model must be trained before calibration.")
-
-        # max value:
-        B = 0
-        
-        # probabilities
-        p = self.predict_proba(X_cal).ravel()
-        # target values
-        targets = np.asarray(y_cal).ravel()
-
-        if len(p) != len(targets):
-            raise RuntimeError("Calibration features and labels have different lengths.")
-
-        # grid of candidate lambdas: start with largest lambdas
-        lambdas = np.linspace(p.min(), p.max(), n_grid)[::-1]  # descending
-
-        t = B
-        for lam in lambdas:
-            # get a mask (True: if p < lambda)
-            mask = p < lam
-            # all trues
-            k = np.sum(mask)
-            if k == 0:
-                continue  # skip, no points below threshold
-            # number of Y=1 (safe) below threshold
-            s = np.sum(targets[mask] == 1)  
-            
-            emp_risk = s / k
-            
-            # Hoeffding one-sided upper bound
-            ub = emp_risk + math.sqrt(math.log(1.0 / delta) / (2.0 * k))
-            if ub <= alpha:
-                t = lam
-                break  # pick largest lambda satisfying the risk constraint
-
-        self.calibration_info = {
-            "note": "Conformal-style risk threshold (risk control via grid search)",
-            "alpha": float(alpha),
-            "threshold": float(t)
-        }
-        return dict(self.calibration_info)
-        
-    """
+    @staticmethod
+    def _conformal_quantile(scores: np.ndarray, alpha: float) -> float:
+        """Split-conformal quantile with (n+1) correction."""
+        if not (0.0 <= alpha <= 1.0):
+            raise ValueError("alpha must be in [0,1].")
+        s = np.asarray(scores, dtype=float).reshape(-1)
+        if s.size == 0:
+            raise ValueError("Empty calibration scores.")
+        s_sorted = np.sort(s)
+        k = int(math.ceil((s_sorted.size + 1) * (1.0 - alpha)))
+        k = min(max(k, 1), s_sorted.size)
+        return float(s_sorted[k - 1])
     
     def calibrate_conformal_threshold(self,
-                                  X_cal: Union[np.ndarray, "pd.DataFrame"],
-                                  y_cal: Union[np.ndarray, "pd.Series"],
-                                  alpha: float = 0.05,
-                                  ) -> Dict[str, Any]:
+                                      X_cal: Union[np.ndarray, "pd.DataFrame"],
+                                      y_cal: Union[np.ndarray, "pd.Series"],
+                                      alpha: float = 0.05) -> Dict[str, Any]:
         """
-        Conformal prediciton
+        Split Conformal Prediction (CP) for *set coverage*.
+
+        Uses nonconformity score s(x,y)= 1-p_hat(y|x).
+        With binary p = p_hat(y=1|x), the calibration score is:
+            s_i = 1 - p_i  if y_i=1
+            s_i = p_i      if y_i=0
+        Then q = conformal quantile of {s_i}.
+        "Safe" label 1 is included in the conformal prediction set iff:
+            p >= 1 - q
+        We return threshold t = 1 - q: if p >= t -> safe
+        It guarantees coverage of the *set predictor*.
         """
         if not getattr(self, "trained", False):
             raise RuntimeError("Model must be trained before calibration.")
-        
-        # probabilities
-        p = self.predict_proba(X_cal).ravel()
-        # target values
-        targets = np.asarray(y_cal).ravel()
+        if not (0.0 <= alpha <= 1.0):
+            raise ValueError("alpha must be in [0,1].")
 
-        if len(p) != len(targets):
+        # predictions (probabilities) as float
+        p = np.asarray(self.predict_proba(X_cal), dtype=float).reshape(-1)
+        # target labels as int
+        y = np.asarray(y_cal).reshape(-1)
+        y = y.astype(int)
+        
+        if p.shape[0] != y.shape[0]:
             raise RuntimeError("Calibration features and labels have different lengths.")
-    
-        residuals = []
-        for i, y in enumerate(targets):
-            if y == 1:
-                residuals.append(1-p[i])
-            else:
-                residuals.append(p[i])
-                
-        quantile = np.quantile(np.array(sorted(residuals)), q=1-alpha)
-        t = 1-quantile
-            
-        self.calibration_info = {"note": "Conformal-style risk threshold (risk control via grid search)",
+        
+        # score of the TRUE label: s_i = 1 - p_true, where p_true = p if y=1 else (1-p)
+        s = np.where(y == 1, 1.0 - p, p)
+
+        q = self._conformal_quantile(s, alpha=alpha)
+        t = float(np.clip(1.0 - q, 0.0, 1.0))
+
+        self.calibration_info = {"method": "CP",
+                                 "note": "Split conformal threshold for including label 'safe' (set-coverage, not risk-specific).",
                                  "alpha": float(alpha),
-                                 "threshold": float(t)}
-        
+                                 "threshold": t,
+                                 "n_cal": int(len(y))}
         return dict(self.calibration_info)
 
-    
+    # conformal risk control (CRC) for false-safe
+    def calibrate_crc_safe_threshold(self,
+                                     X_cal: Union[np.ndarray, "pd.DataFrame"],
+                                     y_cal: Union[np.ndarray, "pd.Series"],
+                                     alpha: float = 0.05,
+                                     delta: float = 0.05,
+                                     n_grid: int = 200,
+                                     min_pred_safe: int = 25) -> Dict[str, Any]:
+        """
+        Conformal Risk Control (CRC) for bounding *false-safe among predicted-safe*: P(Y=0 | predict_safe) <= alpha (with confidence >= 1-delta)
+        - Here predict_safe := [p_hat >= t]: We search thresholds t over a grid and pick the one that satisfies: UCB( false_safe_rate_among_safe ) <= alpha
+
+        Implementation detail:
+        - We test many thresholds; to keep overall confidence 1-delta we use a Bonferroni adjustment: delta_eff = delta / |grid|.
+        """
+        if not self.trained:
+            raise RuntimeError("Model must be trained before calibration.")
+        if not (0.0 <= alpha <= 1.0):
+            raise ValueError("alpha must be in [0,1].")
+        if not (0.0 < delta < 1.0):
+            raise ValueError("delta must be in (0,1).")
+        if n_grid < 2:
+            raise ValueError("n_grid must be >= 2.")
+        if min_pred_safe < 1:
+            raise ValueError("min_pred_safe must be >= 1.")
+
+        p = np.asarray(self.predict_proba(X_cal), dtype=float).reshape(-1)
+        y = np.asarray(y_cal).reshape(-1)
+        y = y.astype(int)
+        
+        if p.shape[0] != y.shape[0]:
+            raise RuntimeError("Calibration features and labels have different lengths.")
+
+        # threshold grid: quantiles of predicted probabilities
+        grid = np.quantile(p, np.linspace(0.0, 1.0, n_grid))
+        grid = np.unique(grid)
+        grid.sort()
+
+        # multiple-testing control across thresholds
+        delta_eff = float(delta / max(1, len(grid)))
+
+        def ucb_false_safe_rate(m: int, k: int) -> float:
+            if k <= 0:
+                return 1.0
+            phat = m / k
+            rad = math.sqrt(math.log(1.0 / delta_eff) / (2.0 * k))
+            return float(min(1.0, phat + rad))
+
+        feasible = []
+        # search the grid: a list of sorted values between 0 and 1:
+        for t in grid:
+            mask = p >= t
+            k = int(mask.sum())  # predicted safe
+            if k < min_pred_safe:
+                continue
+            m = int((y[mask] == 0).sum())  # false safe among predicted safe
+            ub = float(ucb_false_safe_rate(m, k))
+            if ub <= alpha:
+                emp = float(m / k)
+                feasible.append((float(t), k, m, emp, ub))
+
+        if not feasible:
+            print("not feasible!")
+            t_hat = 1.0
+            self.calibration_info = {"method": "CRC",
+                                     "note": "No feasible threshold found; fallback threshold=1.0 (predict safe never).",
+                                     "alpha": float(alpha),
+                                     "delta": float(delta),
+                                     "delta_eff": float(delta_eff),
+                                     "threshold": float(t_hat),
+                                     "n_cal": int(len(y))}
+            return dict(self.calibration_info)
+
+        # choose the smallest feasible threshold -> largest "predicted-safe" set
+        # NOTE: even though the predicted-safe sets are nested as t increases,
+        # the conditional error P(Y=0 | p>=t) is not guaranteed to be monotone in t.
+        # So we explicitly select a threshold from the tested grid.
+        t_hat, k, m, emp, ub = min(feasible, key=lambda z: z[0])
+
+        self.calibration_info = {"method": "CRC",
+                                 "note": "CRC threshold with UCB on false-safe rate among predicted-safe <= alpha.",
+                                 "alpha": float(alpha),
+                                 "delta": float(delta),
+                                 "delta_eff": float(delta_eff),
+                                 "threshold": float(t_hat),
+                                 "n_cal": int(len(y))
+                                 }
+        return dict(self.calibration_info)
+
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained.")
@@ -531,48 +600,36 @@ class LogisticRegressionModel:
         if not self.trained:
             raise RuntimeError("Model not trained.")
         X_in = self._ensure_feature_order(X)
-        proba = self.pipeline.predict_proba(X_in)
-        # assume binary: [:,1] is P(y=1)
-        return np.asarray(proba)[:, 1]
-    
-    def predict_without_threshold(self,
-                                  X: Union[pd.DataFrame, np.ndarray]
-                                 ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Predict labels.
-        Returns labels (and optionally probabilities).
-        """
-        if not self.trained:
-            raise RuntimeError("Model not trained.")
+        proba = np.asarray(self.pipeline.predict_proba(X_in))
 
-        # Predicted probabilities: Calls the fitted pipeline and predict proabilities.
-        probs = self.predict_proba(X)
-        
-        labels = np.zeros_like(probs, dtype=int)
-        # when using threshold: label is 1 if prob >= t_hat -> safe (1), else risk (0)
-        labels[probs >= 0.5] = 1
-        
-        # Return labels and probabilities
-        return (labels, probs)
-        
-    # Predict with CRC threshold
+        # robustly select P(class==1) even if class order is not [0,1]
+        try:
+            classes = self.pipeline[-1].classes_
+        except Exception:
+            classes = None
+        if classes is not None and 1 in set(classes):
+            idx = int(np.where(classes == 1)[0][0])
+            return proba[:, idx]
+        return proba[:, 1]
+    
+    # Predict with conformal threshold
     def predict_with_threshold(self,
-                               X: Union[pd.DataFrame, np.ndarray]
-                               ) -> Tuple[np.ndarray, np.ndarray]:
+                               X: Union[pd.DataFrame, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Predict labels using stored CRC threshold.
-        Returns labels (and optionally probabilities).
+        Predict labels using stored conformal calibration threshold.
+        Returns labels and optionally probabilities.
         """
         if not self.trained:
             raise RuntimeError("Model not trained.")
         
         if not self.calibration_info:
-            raise RuntimeError("No calibraiton info found. Call calibrate_crc_marginal_false_positive first.")
+            raise RuntimeError("No calibration info found. Call calibrate_crc_safe_threshold first.")
 
         # Predicted probabilities: Calls the fitted pipeline and predict proabilities.
         probs = self.predict_proba(X)
-        # CRC threshold
         t_hat = self.calibration_info.get("threshold", None)
+        if t_hat is None:
+            raise RuntimeError("Calibration info missing threshold.")
         
         labels = np.zeros_like(probs, dtype=int)
         # when using threshold: label is 1 if prob >= t_hat -> safe (1), else risk (0)
@@ -587,16 +644,13 @@ class LogisticRegressionModel:
             raise RuntimeError("Train model before saving.")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {# Store risk fitness threshold
-                   "empiricial_risk_values": {"alpha_quantile_risk": self.alpha_quantile_risk, "risk_fitness_threshold": self.risk_fitness_threshold},
-                   # Pipeline stores the scaler and classifier:
-                   "pipeline": self.pipeline,
-                   # feature names to ensure correct order during prediction
-                   "feature_names": self.feature_names,
-                   "metadata": self.metadata,
-                   # calibration information for conformal prediction
-                   "calibration_info": self.calibration_info
-               }
+        payload = {
+            "alpha_quantile_risk": self.alpha_quantile_risk,
+            "risk_fitness_threshold": self.risk_fitness_threshold,
+            "pipeline": self.pipeline,
+            "feature_names": self.feature_names,
+            "calibration_info": self.calibration_info,
+        }
         joblib.dump(payload, path)
         return str(path)
     
@@ -607,11 +661,11 @@ class LogisticRegressionModel:
         if not path.exists():
             raise FileNotFoundError(f"Model file not found: {path}")
         payload = joblib.load(path)
-        lm = cls()
-        lm.empiricial_risk_values = payload.get("empiricial_risk_values", {})
+        #
+        lm = cls(alpha_quantile_risk=float(payload.get("alpha_quantile_risk", 1.0)),
+                 risk_fitness_threshold=float(payload.get("risk_fitness_threshold", 1.0)))
         lm.pipeline = payload.get("pipeline")
         lm.feature_names = payload.get("feature_names")
-        lm.metadata = payload.get("metadata", {})
         lm.calibration_info = payload.get("calibration_info", {})
         lm.trained = True
         return lm

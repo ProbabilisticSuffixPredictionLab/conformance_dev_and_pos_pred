@@ -9,6 +9,17 @@ class DeviationPrediction:
     def __init__(self, pred_conf_set):
         # list of dicts containing: target case, alignment, fitness, cost
         self.pred_conf_set = pred_conf_set
+
+    def __get_case_meta(self, n: int):
+        case_ids = self.pred_conf_set.get("case_id")
+        labels = self.pred_conf_set.get("label")
+
+        if case_ids is not None and len(case_ids) != n:
+            raise ValueError("Mismatched length for pred_conf_set['case_id'].")
+        if labels is not None and len(labels) != n:
+            raise ValueError("Mismatched length for pred_conf_set['label'].")
+
+        return case_ids, labels
         
     def __get_target_aligns_pref_suf(self) -> List[Any]:
         """
@@ -105,9 +116,13 @@ class DeviationPrediction:
         tgt_deviations = [[(a,b) for (a,b) in align if a != b] for align in cleaned_tgt_alignments]
         pred_deviations = [[(a,b) for (a,b) in align if a != b] for align in cleaned_pred_alignments]
 
+        case_ids, labels = self.__get_case_meta(n)
+
         results = []
         for i in range(len(tgt_aligns)):
             result = {"prefix": tgt_prefs[i],
+                      "case_id": case_ids[i] if case_ids is not None else None,
+                      "label": int(labels[i]) if labels is not None else None,
                       "tgt_suffix": tgt_sufs[i],
                       "pred_suffix": pred_sufs[i],
                       # All suffix aligning (synchronous) and deviating moves 
@@ -139,6 +154,8 @@ class DeviationPrediction:
         n = len(tgt_prefs)
         if not (len(tgt_aligns) == len(tgt_sufs) == len(pred_aligns_all) == len(pred_prefs_all) == len(pred_sufs_all) == n):
             raise ValueError("Mismatched lengths between target/predicted prefixes/alignments/suffixes.")
+
+        case_ids, labels = self.__get_case_meta(n)
 
         # Aggregate probabilistic deivations
         results = []
@@ -188,7 +205,9 @@ class DeviationPrediction:
                     else:
                         continue
                 
-            results.append({"prefix": tgt_prefs[i],
+            results.append({"case_id": case_ids[i] if case_ids is not None else None,
+                            "label": int(labels[i]) if labels is not None else None,
+                            "prefix": tgt_prefs[i],
                             "tgt_suffix": tgt_sufs[i],
                             "pred_suffix": sampled_suffixes,
                             "tgt_cleaned_aligns": cleaned_tgt_alignments[i],

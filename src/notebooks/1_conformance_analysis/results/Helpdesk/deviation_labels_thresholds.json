@@ -11,34 +11,34 @@
             "Create SW anomaly",
             ">>"
         ],
-        "value": 0.0
+        "value": 0.03
     },
     {
         "key": [
             "Require upgrade",
             ">>"
         ],
-        "value": 0.02
+        "value": 0.0
     },
     {
         "key": [
             "Resolve ticket",
             ">>"
         ],
-        "value": 0.27
+        "value": 0.26
     },
     {
         "key": [
             "Take in charge ticket",
             ">>"
         ],
-        "value": 0.33
+        "value": 0.31
     },
     {
         "key": [
             "Wait",
             ">>"
         ],
-        "value": 0.33
+        "value": 0.31
     }
 ]

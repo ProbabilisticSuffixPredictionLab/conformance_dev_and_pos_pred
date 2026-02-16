@@ -1,13 +1,10 @@
-"""
-
-"""
 from __future__ import annotations
 import pickle
 from pathlib import Path
 import numpy as np
 import textwrap
 from collections import Counter, defaultdict
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterable
+from typing import Any, Dict, List, Tuple, Union, Iterable
 
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -15,7 +12,6 @@ from matplotlib.ticker import PercentFormatter
 import textwrap
 from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea, VPacker
 from matplotlib.ticker import MaxNLocator
-
 
 def load_results(path: Union[str, Path]) -> dict:
     with Path(path).open("rb") as f:
@@ -157,28 +153,27 @@ class DeviationEvaluation:
     
     # data selection
     def _cases_with_target_deviations(self) -> List[dict]:
-        return [
-            {
-                'prefix': dr.get('prefix', []),
+        return [{'prefix': dr.get('prefix', []),
                 'tgt_suffix': dr.get('tgt_suffix', []),
                 'pred_suffix': dr.get('pred_suffix', []),
                 'tgt_aligns': dr.get('tgt_cleaned_aligns', []),
                 'pred_aligns': dr.get('pred_cleaned_aligns', []),
                 'tgt_deviations': dr.get('tgt_deviations', []),
-                'pred_deviations': dr.get('pred_deviations', []),
-            }
-            for dr in self.deviation_results
-            if len(dr.get('tgt_deviations', [])) > 0
-        ]
+                'pred_deviations': dr.get('pred_deviations', [])} 
+                
+                for dr in self.deviation_results 
+                if len(dr.get('tgt_deviations', [])) > 0
+                ]
 
-    # (A) UPDATED: positions now in sequence-index; also optionally return extras for hitProb
+    # updated: positions now in sequence-index; also optionally return extras for hitProb
     def get_suffix_devs(self, return_extras: bool = False):
         """
         Default (return_extras=False) keeps your original return shape:
-          return tgt_suffixes, pred_suffix_samples, (tgt_model_moves, tgt_log_moves), (pred_model_moves, pred_log_moves)
+        return tgt_suffixes, pred_suffix_samples, (tgt_model_moves, tgt_log_moves), (pred_model_moves, pred_log_moves)
 
         If return_extras=True, additionally returns: (pred_model_sets, pred_log_sets), num_samples_per_case, prefixes
         """
+        # get all cases where the target contains a deviation:
         real_deviations = self._cases_with_target_deviations()
 
         prefixes = [rd.get('prefix', []) for rd in real_deviations]
@@ -383,7 +378,9 @@ class DeviationEvaluation:
         sets_case = (pred_suff_sets[suffix_index] if (pred_suff_sets and suffix_index < len(pred_suff_sets)) else None)
 
         is_log = (move == "log")
-        denom_req = max(1, int(num_samples))
+        # Use the *actual* number of available samples for normalization.
+        # Using the num_samples argument here can artificially deflate rates when fewer samples exist.
+        denom_req = max(1, len(sets_case) if (sets_case is not None) else len(samples_case))
         highlight_tok = str(label) if is_log else None
 
         PAPER = dict(fs_title=13.5, fs_h=11, fs_t=10, fs_s=9,
@@ -482,7 +479,8 @@ class DeviationEvaluation:
                 for p in (smap.get(label) or set()):
                     pos_counts[int(p)] += 1
             pos = sorted(pos_counts)
-            return pos, [pos_counts[p] / denom_req for p in pos], dict(pos_counts), denom_req
+            denom = max(1, len(label_sets or []))
+            return pos, [pos_counts[p] / denom for p in pos], dict(pos_counts), denom
 
         if sets_case is not None:
             positions, probs, counts_shown, denom_shown = _rate_from_sets(sets_case)
@@ -703,20 +701,13 @@ def _extract_positions_sequence_index(align: List[Tuple[Any, Any]]):
     return dict(model_positions), dict(log_positions)
 
 
-def _aggregate_sample_positions_sequence_index(
-    align_samples: List[List[Tuple[Any, Any]]]
-) -> Tuple[
-    Dict[str, Dict[int, int]],
-    Dict[str, Dict[int, int]],
-    List[Dict[str, set]],
-    List[Dict[str, set]],
-]:
+def _aggregate_sample_positions_sequence_index(align_samples: List[List[Tuple[Any, Any]]]):
     """
     For a list of alignment samples:
-      - counts_model[label][pos] = number of samples where ('>>', label) occurs at model-pos
-      - counts_log[label][pos]   = number of samples where (label, '>>') occurs at log-pos
-      - sets_model[sample_idx][label] = set(model positions) for that sample
-      - sets_log[sample_idx][label]   = set(log positions) for that sample
+    - counts_model[label][pos] = number of samples where ('>>', label) occurs at model-pos
+    - counts_log[label][pos]   = number of samples where (label, '>>') occurs at log-pos
+    - sets_model[sample_idx][label] = set(model positions) for that sample
+    - sets_log[sample_idx][label]   = set(log positions) for that sample
     """
     counts_model: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
     counts_log: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
