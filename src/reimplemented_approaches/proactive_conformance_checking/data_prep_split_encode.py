@@ -128,9 +128,20 @@ class DeviationLabeling:
         # vocabularies for activities/resources
         activities = df_sorted["concept:name"].fillna("NA").astype(str).unique().tolist()
         act2idx = {act: (i+1) for i, act in enumerate(sorted(activities))}   # 0 reserved for PAD
-        
-        resources  = df_sorted["org:resource"].fillna("NA").astype(str).unique().tolist()
+
+        # Some logs store resources in `org:resource`, others in `org:group`.
+        if "org:resource" in df_sorted.columns:
+            resource_source_col = "org:resource"
+        elif "org:group" in df_sorted.columns:
+            resource_source_col = "org:group"
+        else:
+            # Ensure downstream logic always has a resource column.
+            resource_source_col = "org:resource"
+            df_sorted[resource_source_col] = "NA"
+
+        resources = df_sorted[resource_source_col].fillna("NA").astype(str).unique().tolist()
         res2idx = {res: (i+1) for i, res in enumerate(sorted(resources))}
+            
         
         months = df_sorted["time:timestamp"].apply(lambda x: f"{x.month}_{x.year}")
         unique_months = sorted(months.unique())
@@ -187,7 +198,8 @@ class DeviationLabeling:
                     if p-1 <= i:
                         # values from the log
                         act = str(g.loc[p-1, "concept:name"]) if "concept:name" in g.columns else "NA"
-                        res = str(g.loc[p-1, "org:resource"]) if "org:resource" in g.columns else "NA"
+
+                        res = str(g.loc[p-1, resource_source_col]) if resource_source_col in g.columns else "NA"
                         ts  = g.loc[p-1, "time:timestamp"]
                         # encoded values
                         act_row[p-1] = act2idx.get(act, 0)
@@ -263,12 +275,14 @@ class DeviationLabeling:
 class TrainTestSplit:
     def __init__(self,
                  df_labled_deviations: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
-                 label_strategy: str = "collective"):
+                 label_strategy: str = "collective",
+                 seed: int = 42):
         
         if label_strategy not in {"collective", "separate"}:
             raise ValueError("label_strategy must be 'collective' or 'separate'")
         self.df_labeled_deviations = df_labled_deviations
         self.label_strategy = label_strategy
+        self.seed = seed
 
     def _split_dataframe_by_cases(self,
                                   df: pd.DataFrame,
@@ -279,10 +293,13 @@ class TrainTestSplit:
             empty = pd.DataFrame(columns=df.columns if df is not None else [])
             return empty.copy(), empty.copy(), empty.copy()
 
-        cases = df["case_id"].dropna().unique()
+        # Sort case IDs before shuffling so the split is stable even if df row order changes.
+        cases = df["case_id"].dropna().astype(str).unique()
         if len(cases) == 0:
             empty = df.iloc[0:0].copy()
             return empty, empty.copy(), empty.copy()
+
+        cases = np.array(sorted(cases.tolist(), key=str), dtype=object)
 
         rng = np.random.default_rng(seed)
         cases = rng.permutation(cases)
@@ -312,10 +329,11 @@ class TrainTestSplit:
         return train_df, val_df, test_df
 
     def data_split(self,
-                   seed: int = 42,
+                   seed: Union[int, None] = None,
                    train_frac: float = 2/3,
                    val_frac: float = 0.0):
         data = self.df_labeled_deviations
+        seed = self.seed if seed is None else seed
 
         if self.label_strategy == "collective":
             if not isinstance(data, pd.DataFrame):
