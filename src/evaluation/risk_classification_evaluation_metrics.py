@@ -104,12 +104,7 @@ def risk_model_eval(labels, probs, y):
 def risk_model_eval_median_fitness(samples_fitness, y, fitness_threshold: float):
     """
     Baseline evaluation using the *median* suffix fitness score across sampled suffixes.
-
-    Parameters:
-    - samples_fitness: per-case sample fitness values (list of arrays/lists or 2D array)
-    - y: true labels (1 = safe, 0 = risk)
-    - fitness_threshold: decision threshold on median fitness
-
+    
     Decision rule:
     - predict safe (1) if median_fitness >= fitness_threshold else risk (0)
     """

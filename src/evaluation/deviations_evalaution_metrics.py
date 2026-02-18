@@ -4,12 +4,11 @@ from pathlib import Path
 import numpy as np
 import textwrap
 from collections import Counter, defaultdict
-from typing import Any, Dict, List, Tuple, Union, Iterable
+from typing import List, Tuple, Union, Iterable, Optional, Set
 
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
-import textwrap
 from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea, VPacker
 from matplotlib.ticker import MaxNLocator
 
@@ -30,10 +29,17 @@ class DeviationEvaluation:
         self.deviation_results = list(deviation_results)
     
     # updated
-    def precision_recall_macro_by_label_dev(self) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
+    def precision_recall_macro_by_label_dev(self,
+                                            weighted_macro: bool = False,
+                                            return_counts: bool = False):
         """
         Compute per-label precision and recall (BINARY presence per case) only for labels appearing in the target set,
         then return macro-averages across those target labels.
+
+        Aggregation:
+        - weighted_macro=False (default): unweighted macro across labels (each label counts equally).
+        - weighted_macro=True: support-weighted macro across labels, where support is the number of cases
+          where the label is present in the TARGET (binary presence per case).
 
         Per label (per case):
         TP: pred 1, tgt 1
@@ -42,7 +48,7 @@ class DeviationEvaluation:
         TN: pred 0, tgt 0   (not needed for prec/rec)
 
         Notes:
-        - Uses set() per case (binary), not counts. -> Only chek if label is in dev at least once!
+        - Uses set() per case (binary) -> Only chek if label is in dev at least once!
         - Only evaluates labels that appear in the TARGET set (total_tgt > 0).
         """
         tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
@@ -85,16 +91,39 @@ class DeviationEvaluation:
             precision_per_label[lbl] = tp_label[lbl] / denom_p if denom_p > 0 else 0.0
             recall_per_label[lbl] = tp_label[lbl] / denom_r if denom_r > 0 else 0.0
 
-        precision_macro = float(np.mean(list(precision_per_label.values()))) if precision_per_label else 0.0
-        recall_macro = float(np.mean(list(recall_per_label.values()))) if recall_per_label else 0.0
+        if not weighted_macro:
+            precision_macro = float(np.mean(list(precision_per_label.values()))) if precision_per_label else 0.0
+            recall_macro = float(np.mean(list(recall_per_label.values()))) if recall_per_label else 0.0
+        else:
+            total_support = sum(total_tgt[lbl] for lbl in target_label_list)
+            precision_macro = (
+                float(sum(precision_per_label[lbl] * total_tgt[lbl] for lbl in target_label_list) / total_support)
+                if total_support > 0 else 0.0
+            )
+            recall_macro = (
+                float(sum(recall_per_label[lbl] * total_tgt[lbl] for lbl in target_label_list) / total_support)
+                if total_support > 0 else 0.0
+            )
             
-        return precision_macro, recall_macro, precision_per_label, recall_per_label
+        if not return_counts:
+            return precision_macro, recall_macro, precision_per_label, recall_per_label
+
+        pred_support = defaultdict(int)
+        for pred_list in pred_deviations:
+            for lbl in set(pred_list):
+                pred_support[lbl] += 1
+
+        counts = {"tgt_support": dict(total_tgt), "pred_support": dict(pred_support)}
+        
+        return precision_macro, recall_macro, precision_per_label, recall_per_label, counts
         
     # updated
-    def precision_recall_macro_by_label_no_dev(self, zero_division: float = 1.0) -> Tuple[float, float, Dict[str, float], Dict[str, float], Dict[str, int]]:
+    def precision_recall_macro_by_label_no_dev(self,
+                                               zero_division: float = 1.0,
+                                               weighted_macro: bool = False,
+                                               return_counts: bool = False):
         """
         Compute per-label precision and recall for the no-deviation (opposite) using BINARY presence per case.
-
         Positive event = label is NOT present in prediction AND NOT present in target (per case).
 
         Per label (per case):
@@ -103,7 +132,7 @@ class DeviationEvaluation:
         FN: pred_no=0, tgt_no=1   (present in pred, absent in tgt)
         TN: pred_no=0, tgt_no=0
 
-        Only evaluates labels that appear in the TARGET set (same filter as dev).
+        same filter as dev).
         """
         tgt_deviations = [dr.get('tgt_deviations', []) for dr in self.deviation_results]
         pred_deviations = [dr.get('pred_deviations', []) for dr in self.deviation_results]
@@ -117,8 +146,8 @@ class DeviationEvaluation:
 
         # accumulators for "no deviation" positives (binary per case)
         tp_no = defaultdict(int)
-        pred_no_count = defaultdict(int)  # #cases where pred says "no deviation" (lbl absent)
-        true_no_count = defaultdict(int)  # #cases where true is "no deviation" (lbl absent)
+        pred_no_count = defaultdict(int)  # cases where pred says "no deviation" (lbl absent)
+        true_no_count = defaultdict(int)  # cases where true is "no deviation" (lbl absent)
 
         for tgt_list, pred_list in zip(tgt_deviations, pred_deviations):
             t_set = set(tgt_list)
@@ -146,205 +175,166 @@ class DeviationEvaluation:
             precision_per_label[lbl] = (tp_no[lbl] / denom_p) if denom_p > 0 else float(zero_division)
             recall_per_label[lbl] = (tp_no[lbl] / denom_r) if denom_r > 0 else float(zero_division)
 
-        precision_macro = float(sum(precision_per_label.values()) / len(precision_per_label)) if precision_per_label else 0.0
-        recall_macro = float(sum(recall_per_label.values()) / len(recall_per_label)) if recall_per_label else 0.0
-
-        return precision_macro, recall_macro, precision_per_label, recall_per_label
-    
-    # data selection
-    def _cases_with_target_deviations(self) -> List[dict]:
-        return [{'prefix': dr.get('prefix', []),
-                'tgt_suffix': dr.get('tgt_suffix', []),
-                'pred_suffix': dr.get('pred_suffix', []),
-                'tgt_aligns': dr.get('tgt_cleaned_aligns', []),
-                'pred_aligns': dr.get('pred_cleaned_aligns', []),
-                'tgt_deviations': dr.get('tgt_deviations', []),
-                'pred_deviations': dr.get('pred_deviations', [])} 
-                
-                for dr in self.deviation_results 
-                if len(dr.get('tgt_deviations', [])) > 0
-                ]
-
-    # updated: positions now in sequence-index; also optionally return extras for hitProb
-    def get_suffix_devs(self, return_extras: bool = False):
-        """
-        Default (return_extras=False) keeps your original return shape:
-        return tgt_suffixes, pred_suffix_samples, (tgt_model_moves, tgt_log_moves), (pred_model_moves, pred_log_moves)
-
-        If return_extras=True, additionally returns: (pred_model_sets, pred_log_sets), num_samples_per_case, prefixes
-        """
-        # get all cases where the target contains a deviation:
-        real_deviations = self._cases_with_target_deviations()
-
-        prefixes = [rd.get('prefix', []) for rd in real_deviations]
-        tgt_aligns = [rd.get('tgt_aligns', []) for rd in real_deviations]
-        pred_aligns = [rd.get('pred_aligns', []) for rd in real_deviations]
-        tgt_suffixes = [rd.get('tgt_suffix', []) for rd in real_deviations]
-        pred_suffix_samples = [rd.get('pred_suffix', []) for rd in real_deviations]
-
-        # target positions (sequence-index)
-        tgt_model_moves, tgt_log_moves = [], []
-        for align in tgt_aligns:
-            mpos, lpos = _extract_positions_sequence_index(align)
-            tgt_model_moves.append(mpos)
-            tgt_log_moves.append(lpos)
-
-        # predicted counts + per-sample sets (sequence-index)
-        pred_model_moves, pred_log_moves = [], []
-        pred_model_sets, pred_log_sets = [], []
-        num_samples_per_case = []
-
-        for align_samples in pred_aligns:
-            cm, cl, sm, sl = _aggregate_sample_positions_sequence_index(align_samples)
-            pred_model_moves.append(cm)
-            pred_log_moves.append(cl)
-            pred_model_sets.append(sm)
-            pred_log_sets.append(sl)
-            num_samples_per_case.append(len(align_samples))
-
-        base = (tgt_suffixes, pred_suffix_samples, (tgt_model_moves, tgt_log_moves), (pred_model_moves, pred_log_moves))
-        if not return_extras:
-            return base
-
-        extras = ((pred_model_sets, pred_log_sets), num_samples_per_case, prefixes)
-        return base + extras
-
-    # (B) UPDATED: likelihood kept + hitProb added (optional)
-    def likelihood_at_target_positions(self,
-                                       tgt_model_moves: List[Dict[str, List[int]]],
-                                       tgt_log_moves: List[Dict[str, List[int]]],
-                                       pred_model_moves: List[Dict[str, Dict[int, int]]],
-                                       pred_log_moves: List[Dict[str, Dict[int, int]]],
-                                       return_hitprob: bool = False,
-                                       pred_model_sets: List[List[Dict[str, set]]] = None,
-                                       pred_log_sets: List[List[Dict[str, set]]] = None,
-                                       num_samples_per_case: List[int] = None):
-        """
-        Keeps your mean likelihood at target positions.
-        Optionally adds hitProb.
-
-        If return_hitprob=False:
-          returns (case_level, per_label_mean, weighted_macro)  [same as before]
-
-        If return_hitprob=True:
-          returns (case_level, per_label_mean, weighted_macro, per_label_hitprob, weighted_macro_hitprob)
-
-        Notes:
-          - If you pass pred_model_sets/pred_log_sets + num_samples_per_case, hitProb uses them.
-          - Otherwise, we will try to compute them from self.get_suffix_devs(return_extras=True).
-          - Likelihood uses num_samples_per_case if provided; otherwise uses constant num_samples.
-        """
-
-        if return_hitprob and (pred_model_sets is None or pred_log_sets is None or num_samples_per_case is None):
-            # compute required extras from the same underlying self.deviation_results
-            _, _, (_, _), (_, _), (pred_model_sets, pred_log_sets), num_samples_per_case, _ = self.get_suffix_devs(return_extras=True)
-
-        def _compute_likelihood(
-            tgt_moves: List[Dict[str, List[int]]],
-            pred_moves: List[Dict[str, Dict[int, int]]],
-        ):
-            if len(tgt_moves) != len(pred_moves):
-                raise ValueError("Target and predicted move collections must have identical length.")
-
-            case_level: List[Dict[str, List[Tuple[int, float]]]] = []
-            per_label_scores: Dict[str, List[float]] = defaultdict(list)
-            per_label_support: Dict[str, int] = defaultdict(int)
-
-            all_labels = sorted({lbl for case in tgt_moves for lbl in case.keys()})
-
-            for i, (tgt_case, pred_case) in enumerate(zip(tgt_moves, pred_moves)):
-                T = num_samples_per_case[i] if (num_samples_per_case is not None) else num_samples
-                case_entry: Dict[str, List[Tuple[int, float]]] = {}
-
-                for label in all_labels:
-                    positions = tgt_case.get(label, [])
-                    if not positions:
-                        continue
-                    counts = pred_case.get(label, {})
-                    position_scores: List[Tuple[int, float]] = []
-                    for pos in positions:
-                        c = counts.get(pos, 0)
-                        prob = (c / T) if T > 0 else 0.0
-                        position_scores.append((pos, float(prob)))
-                        per_label_scores[label].append(float(prob))
-                    per_label_support[label] += len(position_scores)
-                    case_entry[label] = position_scores
-
-                case_level.append(case_entry)
-
-            per_label_mean = {
-                label: (float(np.mean(scores)) if scores else 0.0)
-                for label, scores in per_label_scores.items()
-            }
-
-            total_support = sum(per_label_support.values())
-            weighted_macro = (
-                float(sum(sum(scores) for scores in per_label_scores.values()) / total_support)
+        if not weighted_macro:
+            precision_macro = float(np.mean(list(precision_per_label.values()))) if precision_per_label else 0.0
+            recall_macro = float(np.mean(list(recall_per_label.values()))) if recall_per_label else 0.0
+        else:
+            total_support = sum(true_no_count[lbl] for lbl in target_label_list)
+            precision_macro = (
+                float(sum(precision_per_label[lbl] * true_no_count[lbl] for lbl in target_label_list) / total_support)
                 if total_support > 0 else 0.0
             )
-            return case_level, per_label_mean, weighted_macro, per_label_support
+            recall_macro = (
+                float(sum(recall_per_label[lbl] * true_no_count[lbl] for lbl in target_label_list) / total_support)
+                if total_support > 0 else 0.0
+            )
 
-        def _compute_hitprob(tgt_moves: List[Dict[str, List[int]]],
-                             pred_sets: List[List[Dict[str, set]]],
-                             per_label_support: Dict[str, int]):
-            per_label_hits: Dict[str, List[float]] = defaultdict(list)
+        if not return_counts:
+            return precision_macro, recall_macro, precision_per_label, recall_per_label
 
-            all_labels = sorted({lbl for case in tgt_moves for lbl in case.keys()})
-
-            for i, tgt_case in enumerate(tgt_moves):
-                T = num_samples_per_case[i] if (num_samples_per_case is not None) else len(pred_sets[i])
-                T = max(1, T)
-                sample_sets_case = pred_sets[i]
-
-                for label in all_labels:
-                    true_positions = tgt_case.get(label, [])
-                    if not true_positions:
-                        continue
-                    true_set = set(true_positions)
-
-                    hits = 0
-                    for s in sample_sets_case:
-                        pos_set = s.get(label, set())
-                        if pos_set & true_set:
-                            hits += 1
-                    per_label_hits[label].append(hits / T)
-
-            per_label_hitprob = {
-                label: float(np.mean(vals)) if vals else 0.0
-                for label, vals in per_label_hits.items()
+        # For no-dev, the positive class is "label absent".
+        counts = {"pred_no": dict(pred_no_count), "true_no": dict(true_no_count)}
+        
+        return precision_macro, recall_macro, precision_per_label, recall_per_label, counts
+    
+    # data selection (used by plotting)
+    def _cases_with_target_deviations(self) -> List[dict]:
+        return [
+            {
+                'case_id': dr.get('case_id', None),
+                'label': dr.get('label', None),
+                'prefix': dr.get('prefix', []),
+                
+                'tgt_suffix': dr.get('tgt_suffix', []),
+                'pred_suffix': dr.get('pred_suffix', []),
+                
+                'tgt_cleaned_aligns': dr.get('tgt_cleaned_aligns', []),
+                'pred_cleaned_aligns': dr.get('pred_cleaned_aligns', []),
+                
+                'tgt_deviations': dr.get('tgt_deviations', []),
+                'pred_deviations': dr.get('pred_deviations', []),
+                
+                'tgt_model_moves': dr.get('tgt_model_moves', None),
+                'tgt_log_moves': dr.get('tgt_log_moves', None),
+                
+                'pred_model_moves': dr.get('pred_model_moves', None),
+                'pred_log_moves': dr.get('pred_log_moves', None),
+                'pred_model_moves_pos': dr.get('pred_model_moves_pos', None),
+                'pred_log_moves_pos': dr.get('pred_log_moves_pos', None),
+                'num_samples': dr.get('num_samples', None),
             }
+            for dr in self.deviation_results
+            if len(dr.get('tgt_deviations', []) or []) > 0
+        ]
 
-            total_support = sum(per_label_support.values())
-            weighted_macro_hitprob = (
-                float(sum(per_label_hitprob[lbl] * per_label_support.get(lbl, 0) for lbl in per_label_hitprob) / total_support)
-                if total_support > 0 else 0.0)
+    # risk-only selection
+    def _cases_risk(self) -> List[dict]:
+        return [
+            {
+                'case_id': dr.get('case_id', None),
+                'label': int(dr.get('label', 1)) if dr.get('label', None) is not None else None,
+                'prefix': dr.get('prefix', []),
+                
+                'tgt_suffix': dr.get('tgt_suffix', []),
+                'pred_suffix': dr.get('pred_suffix', []),
+                
+                'tgt_cleaned_aligns': dr.get('tgt_cleaned_aligns', []),
+                'pred_cleaned_aligns': dr.get('pred_cleaned_aligns', []),
+                
+                'tgt_deviations': dr.get('tgt_deviations', []),
+                'pred_deviations': dr.get('pred_deviations', []),
+                
+                'tgt_model_moves': dr.get('tgt_model_moves', None),
+                'tgt_log_moves': dr.get('tgt_log_moves', None),
+                
+                'pred_model_moves': dr.get('pred_model_moves', None),
+                'pred_log_moves': dr.get('pred_log_moves', None),
+                'pred_model_moves_pos': dr.get('pred_model_moves_pos', None),
+                'pred_log_moves_pos': dr.get('pred_log_moves_pos', None),
+                'num_samples': dr.get('num_samples', None),
+            }
+            for dr in self.deviation_results
+            if int(dr.get('label', 1)) == 0
+        ]
 
-            return per_label_hitprob, weighted_macro_hitprob
+    # Likelihood at target deviation positions
+    def likelihood_at_target_positions(self):
+        """
+        Compute likelihood at target deviation positions for risk cases only.
 
-        model_case, model_label_mean, model_weighted, model_support = _compute_likelihood(tgt_model_moves, pred_model_moves)
-        log_case, log_label_mean, log_weighted, log_support = _compute_likelihood(tgt_log_moves, pred_log_moves)
+        For each risk case:
+        - If both tgt_model_moves and tgt_log_moves are empty: skip.
+        - For each target move + target position, check if the corresponding predicted move exists.
+        - If yes and the position exists in the predicted move's position-prob list, store the prob.
 
-        case_level = {"model": model_case, "log": log_case}
-        per_label_mean = {"model": model_label_mean, "log": log_label_mean}
-        weighted_macro = {"model": model_weighted, "log": log_weighted}
+        Returns
+        - (model_hits, log_hits, model_macro_avg, log_macro_avg), where each hits list is: [(((a,b), pos), prob), ...]
 
-        if not return_hitprob:
-            return case_level, per_label_mean, weighted_macro
+        Macro averages are computed per list (model vs log) as:
+        - for each risk case, take the mean probability over target positions (misses contribute 0.0), then average those per-case means.
+        """
+        risk_cases = self._cases_risk()
 
-        model_hit, model_hit_weighted = _compute_hitprob(tgt_model_moves, pred_model_sets, model_support)
-        log_hit, log_hit_weighted = _compute_hitprob(tgt_log_moves, pred_log_sets, log_support)
+        model_hits: List[Tuple[Tuple[Tuple[str, str], int], float]] = []
+        log_hits: List[Tuple[Tuple[Tuple[str, str], int], float]] = []
 
-        per_label_hitprob = {"model": model_hit, "log": log_hit}
-        weighted_macro_hitprob = {"model": model_hit_weighted, "log": log_hit_weighted}
+        model_case_means: List[float] = []
+        log_case_means: List[float] = []
 
-        return case_level, per_label_mean, weighted_macro, per_label_hitprob, weighted_macro_hitprob
+        for rc in risk_cases:
+            tgt_model = rc.get('tgt_model_moves') or {} # get target moves
+            tgt_log = rc.get('tgt_log_moves') or {}
+            if (not tgt_model) and (not tgt_log):
+                continue
+
+            pred_model_pos = rc.get('pred_model_moves_pos') or {} # get prediction moves
+            pred_log_pos = rc.get('pred_log_moves_pos') or {}
+            if not isinstance(pred_model_pos, dict):
+                pred_model_pos = {}
+            if not isinstance(pred_log_pos, dict):
+                pred_log_pos = {}
+
+            model_scores_at_targets: List[float] = [] # store the likelihoods per case for macro average
+            log_scores_at_targets: List[float] = [] # 
+
+            # iterate model moves: ('>>', label)
+            for label, positions in (tgt_model or {}).items():# label: move, positions: list of pos in target suffix
+                move = label
+                pos_list = pred_model_pos.get(move) or [] # list of positions: [(pos, prob across samples), ...]
+                pos_map = {int(p): float(prob) for (p, prob) in pos_list} # dict of list
+                for pos in positions or []:
+                    pos_i = int(pos) # get position
+                    prob = float(pos_map.get(pos_i, 0.0)) # get probability
+                    model_scores_at_targets.append(prob) # add prob for macro averaging
+                    if pos_i in pos_map:
+                        model_hits.append(((move, pos_i), prob)) # store move with right position and probability
+
+            # same logic as for model moves
+            # iterate through log moves: (label, '>>')
+            for label, positions in (tgt_log or {}).items(): 
+                # move as string
+                move = label
+                pos_list = pred_log_pos.get(move) or []
+                pos_map = {int(p): float(prob) for (p, prob) in pos_list}
+                for pos in positions or []:
+                    pos_i = int(pos)
+                    prob = float(pos_map.get(pos_i, 0.0))
+                    log_scores_at_targets.append(prob)
+                    if pos_i in pos_map:
+                        log_hits.append(((move, pos_i), prob))
+
+            if model_scores_at_targets:
+                model_case_means.append(sum(model_scores_at_targets) / len(model_scores_at_targets))
+            if log_scores_at_targets:
+                log_case_means.append(sum(log_scores_at_targets) / len(log_scores_at_targets))
+
+        model_macro_avg = (sum(model_case_means) / len(model_case_means)) if model_case_means else None
+        log_macro_avg = (sum(log_case_means) / len(log_case_means)) if log_case_means else None
+
+        return model_hits, log_hits, model_macro_avg, log_macro_avg
 
 
-
-
-
-
-
+####### PLOTTING Prototype ########
 
     def plot_suffix_deviation_distribution(
         self,
@@ -356,13 +346,14 @@ class DeviationEvaluation:
         pred_suffix_samples,
         pred_suff_sets=None,
         tgt_suffixes=None,
-        num_samples: int = 100,
-        figsize=(12, 5),
+        figsize=(16.0, 8.0),
         dpi: int = 220,
+        scale: float = 1.0,
+        match_header_font: bool = False,
         style: str = "paper",   # "paper" | "dense" | "auto"
         show: bool = True,
-        return_objects: bool = False,
-    ):
+        return_objects: bool = False):
+        
         if not (0 <= suffix_index < len(tgt_suff_move)):
             raise IndexError("suffix_index out of range.")
 
@@ -383,14 +374,43 @@ class DeviationEvaluation:
         denom_req = max(1, len(sets_case) if (sets_case is not None) else len(samples_case))
         highlight_tok = str(label) if is_log else None
 
-        PAPER = dict(fs_title=13.5, fs_h=11, fs_t=10, fs_s=9,
-                    max_chars=92, max_chars_s=88,
-                    max_ev_prefix=26, max_ev_suffix=34, max_ev_sample=38,
-                    gap_h=0.030, gap_b=0.020)
-        DENSE = dict(fs_title=13, fs_h=10, fs_t=9, fs_s=8,
-                    max_chars=108, max_chars_s=102,
-                    max_ev_prefix=32, max_ev_suffix=42, max_ev_sample=46,
-                    gap_h=0.024, gap_b=0.017)
+        # Bigger typography for paper-ready figures (requested)
+        # NOTE: These are intentionally large so the figure remains readable
+        # when scaled down in a paper.
+        scale = float(scale) if scale is not None else 1.0
+        scale = 1.0 if not np.isfinite(scale) else max(0.5, scale)
+
+        # Scale figure size and typography together to preserve proportions.
+        figsize = (float(figsize[0]) * scale, float(figsize[1]) * scale)
+        PAPER = dict(
+            fs_title=int(round(28 * scale)),
+            fs_h=int(round(22 * scale)),
+            fs_t=int(round(19 * scale)),
+            fs_s=int(round(16 * scale)),
+            # Slightly smaller line widths -> earlier line breaks (prevents crowding into the right panel)
+            max_chars=78,
+            max_chars_s=72,
+            # Force heavier line breaks in the left text block.
+            # This keeps the right plot from being squeezed when exported.
+            max_toks_per_line=3,
+            max_ev_prefix=26,
+            max_ev_sample=38,
+            gap_h=0.038 * scale,
+            gap_b=0.026 * scale,
+        )
+        DENSE = dict(
+            fs_title=int(round(24 * scale)),
+            fs_h=int(round(19 * scale)),
+            fs_t=int(round(16 * scale)),
+            fs_s=int(round(14 * scale)),
+            max_chars=104,
+            max_chars_s=96,
+            max_toks_per_line=4,
+            max_ev_prefix=32,
+            max_ev_sample=46,
+            gap_h=0.032 * scale,
+            gap_b=0.022 * scale,
+        )
 
         if style not in {"paper", "dense", "auto"}:
             style = "paper"
@@ -400,46 +420,121 @@ class DeviationEvaluation:
         else:
             cfg = PAPER if style == "paper" else DENSE
 
+        # For paper figures, use a stacked layout (text block on top, plot below) so all
+        # elements share the same width and we can avoid aggressive line breaking.
+        paper_like = (style == "paper") or (style == "auto" and cfg == PAPER)
+        stacked_layout = bool(paper_like)
+
+        if stacked_layout:
+            # Relax the paper layout's forced wrapping so long sequences can stay on one line.
+            cfg = dict(cfg)
+            cfg["max_chars"] = max(int(cfg.get("max_chars", 80)), 160)
+            cfg["max_chars_s"] = max(int(cfg.get("max_chars_s", 72)), 160)
+            cfg["max_toks_per_line"] = None
+
         fs_title, fs_h, fs_t, fs_s = cfg["fs_title"], cfg["fs_h"], cfg["fs_t"], cfg["fs_s"]
+        if bool(match_header_font):
+            # Make all text (prefix/sample tokens + plot labels/ticks) match the section-header size.
+            fs_t = fs_h
+            fs_s = fs_h
         GAP_H, GAP_B = cfg["gap_h"], cfg["gap_b"]
+        USE_TEX = bool(plt.rcParams.get("text.usetex", False))
+
+        def _maybe_bold_lines(s: str) -> str:
+            """Make text bold; for usetex use \textbf{...} per line."""
+            s = str(s)
+            if not USE_TEX:
+                return s
+            return "\n".join([r"\textbf{" + ln + "}" for ln in s.split("\n")])
 
         # ---------- helpers ----------
         def _wrap(s: str, w: int) -> str:
             s = str(s)
             return s if len(s) <= w else "\n".join(textwrap.wrap(s, width=w, break_long_words=False, break_on_hyphens=False))
 
-        def _clip(tokens, n, tail=False):
-            t = [str(x) for x in (tokens or [])]
+        def _fmt_key_for_title(k: Tuple[str, str]) -> str:
+            """Format the move tuple for display; keep '>>' readable under LaTeX."""
+            a, b = str(k[0]), str(k[1])
+            use_tex = bool(plt.rcParams.get("text.usetex", False))
+            if use_tex and b == ">>":
+                # Use \textgreater to reliably render '>' in LaTeX text mode.
+                b = r"\textgreater\textgreater"
+            return f"('{a}', '{b}')"
+
+        def _clip_indexed(tokens, n, tail=False):
+            t = [(i, str(x)) for i, x in enumerate(tokens or [])]
             if len(t) <= n:
                 return t
-            return (["…"] + t[-(n - 1):]) if tail else (t[: n - 1] + ["…"])
+            ell = [(-1, "…")]
+            return (ell + t[-(n - 1):]) if tail else (t[: n - 1] + ell)
 
-        def _token_lines(tokens, *, max_events, max_chars, tail=False):
-            toks = _clip(tokens, max_events, tail=tail)
-            out, cur, cur_len = [], [], 0
-            for tok in toks:
+        def _token_lines(
+            tokens,
+            *,
+            max_events,
+            max_chars,
+            tail: bool = False,
+            max_toks_per_line: Optional[int] = None,
+        ):
+            toks = _clip_indexed(tokens, max_events, tail=tail)
+            out: List[List[Tuple[int, str]]] = []
+            cur: List[Tuple[int, str]] = []
+            cur_len = 0
+            for idx, tok in toks:
                 add = len(tok) + (3 if cur else 0)  # " → "
-                if cur and (cur_len + add > max_chars):
+                if cur and (
+                    (cur_len + add > max_chars)
+                    or (max_toks_per_line is not None and len(cur) >= int(max_toks_per_line))
+                ):
                     out.append(cur)
-                    cur, cur_len = [tok], len(tok)
+                    cur, cur_len = [(idx, tok)], len(tok)
                 else:
-                    cur.append(tok)
+                    cur.append((idx, tok))
                     cur_len += add
             if cur:
                 out.append(cur)
-            return out or [["(empty)"]]
+            return out or [[(-1, "(empty)")]]
 
-        def _draw_tokens(ax, x, y_top, tokens, *, max_events, max_chars, tail=False, fontsize=10, hi=None, accent="tab:orange"):
+        def _draw_tokens(
+            ax,
+            x,
+            y_top,
+            tokens,
+            *,
+            max_events,
+            max_chars,
+            max_toks_per_line: Optional[int] = None,
+            tail=False,
+            fontsize=10,
+            hi_token: Optional[str] = None,
+            hi_positions: Optional[Set[int]] = None,
+            accent="tab:orange",
+        ):
             base = "black"
-            lines = _token_lines(tokens, max_events=max_events, max_chars=max_chars, tail=tail)
+            lines = _token_lines(
+                tokens,
+                max_events=max_events,
+                max_chars=max_chars,
+                tail=tail,
+                max_toks_per_line=max_toks_per_line,
+            )
 
             v = []
             for ln in lines:
                 h = []
-                for j, tok in enumerate(ln):
+                for j, (idx, tok) in enumerate(ln):
                     if j:
                         h.append(TextArea(" → ", textprops={"fontsize": fontsize, "color": base}))
-                    col = accent if (hi is not None and tok == str(hi)) else base
+                    col = (
+                        accent
+                        if (
+                            hi_token is not None
+                            and hi_positions is not None
+                            and idx in hi_positions
+                            and tok == str(hi_token)
+                        )
+                        else base
+                    )
                     h.append(TextArea(tok, textprops={"fontsize": fontsize, "color": col}))
                 v.append(HPacker(children=h, align="baseline", pad=0, sep=0))
 
@@ -464,14 +559,30 @@ class DeviationEvaluation:
             y0 = ax.transAxes.inverted().transform((bbox.x0, bbox.y0))[1]
             return y0 - gap_axes
 
-        def _topk_at_pos(samples, pos, token, k=2):
+        def _samples_with_token_at_pos(samples, pos: int, token: str):
             if not samples:
                 return []
-            ctr = Counter(tuple(s) for s in samples if s and len(s) > pos and str(s[pos]) == str(token))
-            return [(c, c / denom_req, list(seq)) for seq, c in ctr.most_common(k)]
+            out = []
+            tok = str(token)
+            for s in samples:
+                if not s or len(s) <= pos:
+                    continue
+                if str(s[pos]) == tok:
+                    out.append(list(s))
+            return out
 
-        true_pos = sorted({int(p) for p in ((tgt_suff_move[suffix_index] or {}).get(label) or [])})
-        counts_dict = dict(((pred_suff_move[suffix_index] or {}).get(label) or {}))
+        # Target move positions are keyed by full move tuples, e.g. (label, '>>') or ('>>', label)
+        tgt_case = tgt_suff_move[suffix_index] if (tgt_suff_move and suffix_index < len(tgt_suff_move)) else {}
+        key = (str(label), ">>") if is_log else (">>", str(label))
+        true_pos = sorted({int(p) for p in ((tgt_case or {}).get(key) or [])})
+
+        # Predicted move position probabilities (preferred):
+        # pred_*_moves_pos[move] == [(pos, prob), ...]
+        pred_pos_list: List[Tuple[int, float]] = []
+        if pred_suff_move and (suffix_index < len(pred_suff_move)):
+            pred_case = pred_suff_move[suffix_index] or {}
+            if isinstance(pred_case, dict):
+                pred_pos_list = [(int(p), float(pr)) for (p, pr) in (pred_case.get(key) or [])]
 
         def _rate_from_sets(label_sets):
             pos_counts = defaultdict(int)
@@ -484,26 +595,20 @@ class DeviationEvaluation:
 
         if sets_case is not None:
             positions, probs, counts_shown, denom_shown = _rate_from_sets(sets_case)
-        elif is_log:
-            pos_counts = defaultdict(int)
-            for seq in samples_case:
-                for p, tok in enumerate(seq or []):
-                    if str(tok) == str(label):
-                        pos_counts[int(p)] += 1
-            positions = sorted(pos_counts)
-            probs = [pos_counts[p] / denom_req for p in positions]
-            counts_shown, denom_shown = dict(pos_counts), denom_req
-        elif counts_dict:
-            denom = max(1, len(samples_case))
-            positions = sorted(counts_dict)
-            probs = [counts_dict[p] / denom for p in positions]
-            counts_shown, denom_shown = dict(counts_dict), denom
+        elif pred_pos_list:
+            positions = [p for (p, _) in pred_pos_list]
+            probs = [pr for (_, pr) in pred_pos_list]
+            counts_shown = {int(p): int(round(float(pr) * denom_req)) for (p, pr) in pred_pos_list}
+            denom_shown = denom_req
         else:
             positions, probs, counts_shown, denom_shown = [], [], {}, denom_req
 
         # ---------- seaborn “camera-ready” theme (local) ----------
         palette = sns.color_palette("colorblind")
-        bar_color, accent = palette[0], palette[1]
+        # Keep bars blue, but render highlighted tokens (e.g., the deviating label) in red.
+        # Use the palette's red entry when available (colorblind-friendly).
+        accent_idx = 3 if len(palette) > 3 else 1
+        bar_color, accent = palette[0], palette[accent_idx]
 
         rc = {
             "font.family": "DejaVu Sans",
@@ -520,31 +625,105 @@ class DeviationEvaluation:
             "ps.fonttype": 42,
         }
         ctx = "paper" if style != "dense" else "notebook"
-        font_scale = 1.06 if style == "paper" else 0.95
+        font_scale = (1.65 if style == "paper" else 1.35) * scale
 
         with sns.axes_style("ticks", rc=rc), sns.plotting_context(ctx, font_scale=font_scale, rc=rc):
             # deterministic layout (avoid constrained_layout quirks with offsetboxes)
             fig = plt.figure(figsize=figsize, dpi=dpi, constrained_layout=False)
-            fig.subplots_adjust(left=0.035, right=0.99, top=0.89, bottom=0.12, wspace=0.10)
+            if stacked_layout:
+                # Use a dedicated header row + equal spacer rows for a clean, paper-like layout.
+                fig.subplots_adjust(left=0.06, right=0.99, top=0.96, bottom=0.08, hspace=0.0)
+            else:
+                # Side-by-side layout spacing.
+                wspace = 0.3 if paper_like else 0.04
+                fig.subplots_adjust(left=0.035, right=0.99, top=0.89, bottom=0.12, wspace=wspace)
 
-            gs = fig.add_gridspec(1, 2, width_ratios=[1.32, 1.0])
+            if stacked_layout:
+                # Layout order:
+                # 1) header
+                # 2) spacer (header → text)
+                # 3) text block (Prefix + sampled event sequence)
+                # 4) spacer (text → plot)
+                # 5) plot (position distribution)
+                # The two spacer rows have equal height, ensuring equal vertical gaps.
+                hdr_h = 0.26
+                gap_h = 0.14
+                txt_h = 0.92
+                plot_h = 1.25
+                gs = fig.add_gridspec(5, 1, height_ratios=[hdr_h, gap_h, txt_h, gap_h, plot_h])
 
-            ax_txt = fig.add_subplot(gs[0, 0])
-            ax_prob = fig.add_subplot(gs[0, 1])
+                ax_hdr = fig.add_subplot(gs[0, 0]); ax_hdr.axis("off")
+                # Leave gs[1, 0] empty as a spacer row.
+                ax_txt = fig.add_subplot(gs[2, 0])
+                # Leave gs[3, 0] empty as a spacer row.
+                ax_prob = fig.add_subplot(gs[4, 0])
 
-            # shrink + lift the bar axis -> visually “shorter” plot and better balance
-            shrink = 0.70 if (len(true_pos) <= 1 and len(prefix) <= 2) else 0.78
-            lift   = 0.14 if shrink < 0.78 else 0.10
-            p = ax_prob.get_position()
-            ax_prob.set_position([p.x0, p.y0 + p.height * lift, p.width, p.height * shrink])
+                ax_hdr.text(
+                    0.5,
+                    0.52,
+                    _maybe_bold_lines(f"Deviation position distribution -- {_fmt_key_for_title(key)}"),
+                    ha="center",
+                    va="center",
+                    fontsize=fs_title,
+                    fontweight="bold" if not USE_TEX else "normal",
+                    transform=ax_hdr.transAxes,
+                )
+            else:
+                # Slightly larger blocks (less wrapping/clipping)
+                # Add a dedicated spacer column to enforce visible separation.
+                # Layout: keep a small gap and give the right plot more width.
+                # A too-large spacer column will squeeze the right plot.
+                # Give the y-axis label/ticks some breathing room.
+                spacer = 0.32 if paper_like else 0.18
+                gs = fig.add_gridspec(1, 3, width_ratios=[1.05, spacer, 1.45])
 
-            title_move = "log" if is_log else "model"
-            fig.suptitle(
-                f"Deviation position distribution — label='{label}', move='{title_move}'",
-                fontsize=fs_title,
-                fontweight="bold",
-                y=0.965,
-            )
+                ax_txt = fig.add_subplot(gs[0, 0])
+                ax_gap = fig.add_subplot(gs[0, 1])
+                ax_gap.axis("off")
+                ax_prob = fig.add_subplot(gs[0, 2])
+
+            if not stacked_layout:
+                # shrink + lift the bar axis -> visually “shorter” plot and better balance
+                shrink = 0.70 if (len(true_pos) <= 1 and len(prefix) <= 2) else 0.78
+                lift   = 0.14 if shrink < 0.78 else 0.10
+                p = ax_prob.get_position()
+                ax_prob.set_position([p.x0, p.y0 + p.height * lift, p.width, p.height * shrink])
+
+            if not stacked_layout:
+                fig.suptitle(
+                    _maybe_bold_lines(f"Deviation position distribution -- {_fmt_key_for_title(key)}"),
+                    fontsize=fs_title,
+                    fontweight="bold" if not USE_TEX else "normal",
+                    y=0.965,
+                )
+
+            if not stacked_layout:
+                # ---------- aligned subtitles (left + right) ----------
+                # Draw both subtitles at the same figure y-position to align their height.
+                # Place them below the suptitle to increase vertical spacing.
+                bbox_txt = ax_txt.get_position()
+                bbox_prob = ax_prob.get_position()
+                y_subtitle = min(0.93, float(fig.subplotpars.top) + 0.012)
+
+                fig.text(
+                    bbox_txt.x0 + 0.002,
+                    y_subtitle,
+                    _maybe_bold_lines(f"Prefix (len={len(prefix)}):"),
+                    ha="left",
+                    va="bottom",
+                    fontsize=fs_h,
+                    fontweight="bold" if not USE_TEX else "normal",
+                )
+
+                fig.text(
+                    (bbox_prob.x0 + bbox_prob.x1) / 2,
+                    y_subtitle,
+                    _maybe_bold_lines(f"Predicted rate of {_fmt_key_for_title(key)}"),
+                    ha="center",
+                    va="bottom",
+                    fontsize=fs_h,
+                    fontweight="bold" if not USE_TEX else "normal",
+                )
 
             # ---------- left text panel ----------
             ax_txt.axis("off")
@@ -554,28 +733,66 @@ class DeviationEvaluation:
             X, y = 0.01, 0.985  # tiny padding looks better than flush-left
 
             def add_header(text: str, y: float) -> float:
-                t = ax_txt.text(X, y, _wrap(text, cfg["max_chars"]),
-                                ha="left", va="top", fontsize=fs_h, fontweight="bold", clip_on=True)
+                hdr = _wrap(text, cfg["max_chars"])
+                hdr = _maybe_bold_lines(hdr)
+                t = ax_txt.text(
+                    X,
+                    y,
+                    hdr,
+                    ha="left",
+                    va="top",
+                    fontsize=fs_h,
+                    fontweight="bold" if not USE_TEX else "normal",
+                    clip_on=True,
+                )
                 return _after_artist(fig, ax_txt, t, GAP_H)
 
-            def add_tokens(tokens, y: float, *, max_events, max_chars, tail=False, hi=None) -> float:
-                ab = _draw_tokens(ax_txt, X, y, tokens,
-                                max_events=max_events, max_chars=max_chars,
-                                tail=tail, fontsize=fs_t, hi=hi, accent=accent)
+            def add_tokens(
+                tokens,
+                y: float,
+                *,
+                max_events,
+                max_chars,
+                tail: bool = False,
+                hi_token: Optional[str] = None,
+                hi_positions: Optional[Set[int]] = None,
+            ) -> float:
+                ab = _draw_tokens(
+                    ax_txt,
+                    X,
+                    y,
+                    tokens,
+                    max_events=max_events,
+                    max_chars=max_chars,
+                    max_toks_per_line=cfg.get("max_toks_per_line"),
+                    tail=tail,
+                    fontsize=fs_t,
+                    hi_token=hi_token,
+                    hi_positions=hi_positions,
+                    accent=accent,
+                )
                 return _after_artist(fig, ax_txt, ab, GAP_B)
 
-            y = add_header(f"Prefix (len={len(prefix)})", y)
-            y = add_tokens(prefix, y, max_events=cfg["max_ev_prefix"], max_chars=cfg["max_chars"], tail=True, hi=None)
+            if stacked_layout:
+                y = add_header(f"Prefix (len={len(prefix)}):", y)
+            y = add_tokens(prefix, y, max_events=cfg["max_ev_prefix"], max_chars=cfg["max_chars"], tail=True)
             y -= GAP_B * 0.20
 
-            dev_str = ", ".join(map(str, true_pos)) if true_pos else "(none)"
-            y = add_header(f"Target suffix (len={len(tgt_suffix)}) — deviating positions: {dev_str}", y)
-            y = add_tokens(tgt_suffix, y, max_events=cfg["max_ev_suffix"], max_chars=cfg["max_chars"],
-                        tail=False, hi=highlight_tok)
-            y -= GAP_B * 0.20
+            sample_hdr = "Sampled event sequence:"
+            # For the common single-position case, inline the Top-1 summary next to the header.
+            # This avoids an extra standalone "Top 1..." line and looks cleaner in papers.
+            if samples_case and true_pos and len(true_pos) == 1:
+                p0 = int(true_pos[0])
+                samples_at_pos = _samples_with_token_at_pos(samples_case, pos=p0, token=str(label))
+                if samples_at_pos:
+                    tgt_tuple = tuple(tgt_suffix or [])
+                    ctr = Counter(tuple(s) for s in samples_at_pos if tuple(s) != tgt_tuple)
+                    mc = ctr.most_common(1)
+                    if mc:
+                        c = int(mc[0][1])
+                        sample_hdr = f"Sampled event sequence: Top 1. {c}/{denom_req} ({c})"
 
-            y = add_header("Top sampled suffix sequences at deviating positions (top 2)", y)
-
+            y = add_header(sample_hdr, y)
             if not samples_case:
                 t = ax_txt.text(X, y, "(no samples available)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
                 y = _after_artist(fig, ax_txt, t, GAP_B)
@@ -583,32 +800,94 @@ class DeviationEvaluation:
                 t = ax_txt.text(X, y, "(no deviating positions for this label)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
                 y = _after_artist(fig, ax_txt, t, GAP_B)
             else:
+                show_pos_header = len(true_pos) > 1
                 for p0 in true_pos:
                     if y < 0.08:
                         ax_txt.text(X, max(0.02, y), "(truncated to fit figure)",
                                     ha="left", va="bottom", fontsize=fs_s, alpha=0.6, clip_on=True)
                         break
 
-                    y = add_header(f"Pos {p0}", y)
-                    topk = _topk_at_pos(samples_case, pos=p0, token=label, k=2)
+                    if show_pos_header:
+                        y = add_header(f"Position {p0}", y)
 
-                    if not topk:
+                    # Consider only samples that actually contain the deviating label at this position.
+                    samples_at_pos = _samples_with_token_at_pos(samples_case, pos=int(p0), token=str(label))
+                    if not samples_at_pos:
                         t = ax_txt.text(X, y, "(none)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
                         y = _after_artist(fig, ax_txt, t, GAP_B)
                         continue
 
-                    for i, (c, frac, seq) in enumerate(topk, 1):
-                        t = ax_txt.text(X, y, f"{i}. {c}/{denom_req}  ({100*frac:.0f}%)",
-                                        ha="left", va="top", fontsize=fs_t, fontweight="bold", clip_on=True)
+                    tgt_tuple = tuple(tgt_suffix or [])
+                    match_count = sum(1 for s in samples_at_pos if tuple(s) == tgt_tuple)
+
+                    # 1) Target-matching sampled suffix (if present)
+                    if match_count > 0 and tgt_suffix:
+                        t = ax_txt.text(
+                            X,
+                            y,
+                            _maybe_bold_lines(f"Target match. {match_count}/{denom_req} ({match_count})"),
+                            ha="left",
+                            va="top",
+                            fontsize=fs_t,
+                            fontweight="bold" if not USE_TEX else "normal",
+                            clip_on=True,
+                        )
                         y = _after_artist(fig, ax_txt, t, GAP_B * 0.65)
-                        y = add_tokens(seq, y, max_events=cfg["max_ev_sample"], max_chars=cfg["max_chars_s"],
-                                    tail=False, hi=highlight_tok)
+                        y = add_tokens(
+                            tgt_suffix,
+                            y,
+                            max_events=cfg["max_ev_sample"],
+                            max_chars=cfg["max_chars_s"],
+                            tail=False,
+                            hi_token=highlight_tok,
+                            hi_positions={int(p0)},
+                        )
+                        y -= GAP_B * 0.10
+
+                    # 2) Top-1 most frequent sample (excluding target suffix if already shown)
+                    ctr = Counter(tuple(s) for s in samples_at_pos if tuple(s) != tgt_tuple)
+                    topk = [(c, list(seq)) for seq, c in ctr.most_common(1)]
+                    if not topk:
+                        if match_count == 0:
+                            t = ax_txt.text(X, y, "(no samples to rank)", ha="left", va="top", fontsize=fs_t, alpha=0.85, clip_on=True)
+                            y = _after_artist(fig, ax_txt, t, GAP_B)
+                        y -= GAP_B * 0.15
+                        continue
+
+                    for i, (c, seq) in enumerate(topk, 1):
+                        # If we already inlined Top-1 into the header (single-position),
+                        # skip the redundant "Top 1..." label line.
+                        if not (len(true_pos) == 1 and i == 1):
+                            t = ax_txt.text(
+                                X,
+                                y,
+                                _maybe_bold_lines(f"Top {i}. {c}/{denom_req} ({c})"),
+                                ha="left",
+                                va="top",
+                                fontsize=fs_t,
+                                fontweight="bold" if not USE_TEX else "normal",
+                                clip_on=True,
+                            )
+                            y = _after_artist(fig, ax_txt, t, GAP_B * 0.65)
+                        y = add_tokens(
+                            seq,
+                            y,
+                            max_events=cfg["max_ev_sample"],
+                            max_chars=cfg["max_chars_s"],
+                            tail=False,
+                            hi_token=highlight_tok,
+                            hi_positions={int(p0)},
+                        )
                     y -= GAP_B * 0.15
 
             # --- right bar panel (equal spacing) ---
-            ax_prob.set_title(f"Predicted rate of '{label}'", fontsize=fs_h, fontweight="bold", pad=3)
-            ax_prob.set_xlabel("Position (0-based)")
-            ax_prob.set_ylabel("Rate")
+            # In stacked layout, keep the plot free of an extra title to avoid collisions with the main header.
+            # In side-by-side layout, the title is drawn as a figure-level subtitle above (aligned with left panel).
+            ax_prob.set_xlabel("Position (start with index 0)", fontsize=fs_t)
+            # Reduce padding so the y-axis label/ticks don't spill into the left panel.
+            ax_prob.set_ylabel("Rate", fontsize=fs_t, labelpad=2)
+            ax_prob.tick_params(axis="both", labelsize=fs_t)
+            ax_prob.tick_params(axis="y", pad=2)
             ax_prob.yaxis.set_major_formatter(PercentFormatter(1.0))
             ax_prob.yaxis.set_major_locator(MaxNLocator(6))
             ax_prob.grid(axis="y", linestyle=":", alpha=0.22)
@@ -621,12 +900,6 @@ class DeviationEvaluation:
                 bars = ax_prob.bar(xs, probs, color=bar_color, edgecolor="0.25", linewidth=0.8, width=0.78, zorder=3)
                 ax_prob.set_xticks(xs)
                 ax_prob.set_xticklabels([str(p) for p in pos_vals])
-
-                # True deviating positions -> map to categorical index
-                pos_to_x = {p: i for i, p in enumerate(pos_vals)}
-                for tp in true_pos:
-                    if tp in pos_to_x:
-                        ax_prob.axvline(pos_to_x[tp], linestyle="--", linewidth=1.1, color=accent, alpha=0.9, zorder=2)
 
                 ymax = max(probs) if probs else 0.0
                 ax_prob.set_ylim(0, min(1.0, max(0.10, ymax * 1.18)))
@@ -656,88 +929,3 @@ class DeviationEvaluation:
             if return_objects:
                 return fig, (ax_txt, ax_prob)
             return None
-
-
-
-
-
-
-
-# -----------------------
-# helpers for robust (sequence-index) deviation positions
-# -----------------------
-def _is_real_event(x: Any) -> bool:
-    return (x is not None) and (x != ">>")
-
-
-def _extract_positions_sequence_index(align: List[Tuple[Any, Any]]):
-    """
-    Convert alignment indices to *sequence indices* (stable under insertions/deletions).
-
-    Returns:
-      model_positions[label] = list of model-seq indices where ('>>', label) occurs
-      log_positions[label]   = list of log-seq indices   where (label, '>>') occurs
-    """
-    model_positions: Dict[str, List[int]] = defaultdict(list)
-    log_positions: Dict[str, List[int]] = defaultdict(list)
-
-    log_i = -1
-    model_i = -1
-
-    for (log_move, model_move) in align:
-        if _is_real_event(log_move):
-            log_i += 1
-        if _is_real_event(model_move):
-            model_i += 1
-
-        # model deviation: ('>>', x)
-        if (log_move == ">>") and _is_real_event(model_move):
-            model_positions[str(model_move)].append(model_i)
-
-        # log deviation: (x, '>>')
-        elif (model_move == ">>") and _is_real_event(log_move):
-            log_positions[str(log_move)].append(log_i)
-
-    return dict(model_positions), dict(log_positions)
-
-
-def _aggregate_sample_positions_sequence_index(align_samples: List[List[Tuple[Any, Any]]]):
-    """
-    For a list of alignment samples:
-    - counts_model[label][pos] = number of samples where ('>>', label) occurs at model-pos
-    - counts_log[label][pos]   = number of samples where (label, '>>') occurs at log-pos
-    - sets_model[sample_idx][label] = set(model positions) for that sample
-    - sets_log[sample_idx][label]   = set(log positions) for that sample
-    """
-    counts_model: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
-    counts_log: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
-
-    sets_model: List[Dict[str, set]] = []
-    sets_log: List[Dict[str, set]] = []
-
-    for sample in align_samples:
-        mpos, lpos = _extract_positions_sequence_index(sample)
-
-        msets = {lbl: set(pos_list) for lbl, pos_list in mpos.items()}
-        lsets = {lbl: set(pos_list) for lbl, pos_list in lpos.items()}
-        sets_model.append(msets)
-        sets_log.append(lsets)
-
-        for lbl, pos_list in mpos.items():
-            for p in pos_list:
-                counts_model[lbl][p] += 1
-
-        for lbl, pos_list in lpos.items():
-            for p in pos_list:
-                counts_log[lbl][p] += 1
-
-    # normalize
-    counts_model = {
-        lbl: {pos: int(c) for pos, c in sorted(d.items())}
-        for lbl, d in counts_model.items()
-    }
-    counts_log = {
-        lbl: {pos: int(c) for pos, c in sorted(d.items())}
-        for lbl, d in counts_log.items()
-    }
-    return counts_model, counts_log, sets_model, sets_log
