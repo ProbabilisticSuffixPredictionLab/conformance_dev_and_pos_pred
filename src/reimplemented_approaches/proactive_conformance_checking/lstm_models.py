@@ -3,6 +3,12 @@ Reimplementaiton of LSTM seperate, collective for deviation prediction:
 Grohs, M., Pfeiffer, P., Rehse, J.: Proactive conformance checking: An approach for predicting deviations in business processes. Inf. Syst. 127, 102461 (2025)
 """
 
+import os
+# performance imports for torch: torch kernel uses one core only.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["TORCH_NUM_THREADS"] = "1" 
+
 import torch
 import torch.nn as nn
 from pathlib import Path
@@ -152,7 +158,7 @@ class _SingleLabelIDP(nn.Module):
         self.layer_norm = nn.LayerNorm(fc_hidden * 4)
         self.leaky_relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout)
-        self.fc_output = nn.Linear(fc_hidden * 4, 1)
+        self.fc_output = nn.Linear(fc_hidden * 4, 2)
 
     def forward(self,
                 x_act: torch.Tensor,
@@ -177,7 +183,8 @@ class _SingleLabelIDP(nn.Module):
         x = self.leaky_relu(x)
         x = self.dropout(x)
         
-        return self.fc_output(x).squeeze(-1)
+        # B, 2) logits
+        return self.fc_output(x)
 
 class LSTMSeparateIDP(nn.Module):
     def __init__(self,
@@ -236,7 +243,9 @@ class LSTMSeparateIDP(nn.Module):
             [head(x_act, x_res, x_month, x_trace) for head in self.label_heads],dim=-1)
        
         if apply_softmax:
-            logits = torch.softmax(logits, dim=-1)
+            # softmax over the class dimension (size=2), not over labels
+            logits = torch.softmax(logits, dim=1)
+            
         return logits
 
     def save(self, path: str):

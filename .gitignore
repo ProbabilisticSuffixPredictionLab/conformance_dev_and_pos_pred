@@ -243,6 +243,8 @@ src/reimplemented_approaches/proactive_conformance_checking/notebooks/LST;/data_
 src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/training/**/collective/*.pkl
 src/reimplemented_approaches/proactive_conformance_checking/notebooks/LSTM/training/**/separate/*.pkl
 
+src/reimplemented_approaches/original/*
+
 # Do not add the content of the results folder
 results/*
 !results/**/README.md

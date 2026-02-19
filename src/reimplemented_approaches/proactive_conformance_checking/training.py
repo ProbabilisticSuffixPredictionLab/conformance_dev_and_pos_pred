@@ -3,15 +3,19 @@ import copy
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+import os
+
+# performance imports for torch: torch kernel uses one core only.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["TORCH_NUM_THREADS"] = "1" 
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 import torch
 import torch.nn.functional as F
-
-
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
-import os
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 class Training:
     def __init__(self,
@@ -200,7 +204,6 @@ class Training:
             self.model.save(path=self.saving_path)
         else:
             torch.save(self.model.state_dict(), self.saving_path)
-
         return history
     
 

@@ -2,12 +2,16 @@
 Reimplementaiton of FFN seperate, collective for deviation prediction:
 Grohs, M., Pfeiffer, P., Rehse, J.: Proactive conformance checking: An approach for predicting deviations in business processes. Inf. Syst. 127, 102461 (2025)
 """
+import os
+# performance imports for torch: torch kernel uses one core only.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["TORCH_NUM_THREADS"] = "1" 
 
 import torch
 import torch.nn as nn
 from pathlib import Path
 from typing import Optional
-
 
 def _to_2d_float(x: torch.Tensor) -> torch.Tensor:
     """
@@ -19,16 +23,12 @@ def _to_2d_float(x: torch.Tensor) -> torch.Tensor:
         x = x.view(x.size(0), -1)
     return x.float()
 
-
 def _concat_features(x_act: torch.Tensor,
                      x_res: Optional[torch.Tensor] = None,
                      x_month: Optional[torch.Tensor] = None,
                      x_trace: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Concatenate feature blocks as described in the paper's FFN diagrams.
-    Supports two calling conventions:
-    - forward(x_concat): pass only x_act and leave others as None.
-    - forward(x_act, x_res, x_month, x_trace): pass four feature blocks.
     """
     if x_res is None and x_month is None and x_trace is None:
         return _to_2d_float(x_act)
@@ -145,7 +145,7 @@ class _SingleLabelIDP(nn.Module):
         self.leaky_relu_2 = nn.LeakyReLU()
 
         self.dropout = nn.Dropout(dropout)
-        self.fc_output = nn.Linear(fc_hidden_2, 1)
+        self.fc_output = nn.Linear(fc_hidden_2, 2)
 
     def forward(self,
                 x_concat: torch.Tensor) -> torch.Tensor:
@@ -159,7 +159,8 @@ class _SingleLabelIDP(nn.Module):
         x = self.leaky_relu_2(x)
 
         x = self.dropout(x)
-        return self.fc_output(x).squeeze(-1)
+        
+        return self.fc_output(x)
 
 class FFNSeparateIDP(nn.Module):
     def __init__(self,
@@ -175,13 +176,8 @@ class FFNSeparateIDP(nn.Module):
         if num_output_labels is None or num_output_labels < 1:
             raise ValueError("num_output_labels must be provided and > 0")
 
-        # Mirrors LSTMSeparateIDP: in this repo, "separate" uses cross-entropy with
-        # logits of shape [batch, 2] per deviation label-model.
         if num_output_labels != 2:
-            raise ValueError(
-                "FFNSeparateIDP (in this codebase) is used as a binary classifier. "
-                "num_output_labels must be 2 (class logits)."
-            )
+            raise ValueError("FFNSeparateIDP (in this codebase) is used as a binary classifier, num_output_labels must be 2 (class logits).")
 
         self.device = torch.device(device)
 
@@ -214,7 +210,7 @@ class FFNSeparateIDP(nn.Module):
         logits = torch.stack([head(x_concat) for head in self.label_heads], dim=-1)
 
         if apply_softmax:
-            return torch.softmax(logits, dim=-1)
+            return torch.softmax(logits, dim=1)
         return logits
 
     def save(self, path: str):
