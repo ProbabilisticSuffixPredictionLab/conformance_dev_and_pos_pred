@@ -32,12 +32,16 @@ class TraceAttrScaler:
         for col in self.cols:
             if col not in df_train.columns:
                 continue
+            # apply standard scaler to trace attributes
             sc = StandardScaler()
             sc.fit(df_train[[col]].astype(float))
             self.scalers[col] = sc
         return self
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        apply scaling
+        """
         out = df.copy()
         for col, sc in self.scalers.items():
             if col not in out.columns:
@@ -46,8 +50,12 @@ class TraceAttrScaler:
         return out
 
     def fit_transform(self, df_train: pd.DataFrame) -> pd.DataFrame:
+        """
+        learn and apply scaling
+        """
         return self.fit(df_train).transform(df_train)
 
+# apply scaling to train, val and test
 def scale_trace_attrs_after_split(train_data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
                                   val_data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
                                   test_data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
@@ -78,6 +86,10 @@ def scale_trace_attrs_after_split(train_data: Union[pd.DataFrame, Dict[str, pd.D
 class DeviationLabeling:
     def __init__(self,
                  log_name: str,
+                 case_name: str,
+                 activity_name: str,
+                 resource_name: str,
+                 time_name: str,
                  path_event_log: str,
                  path_process_model: str,
                  label_strategy: str = 'collective'):
@@ -85,6 +97,11 @@ class DeviationLabeling:
         self.log_name = log_name
         self.path_event_log = path_event_log
         self.path_process_model = path_process_model
+        
+        self.case_name = case_name
+        self.activity_name = activity_name
+        self.time_name = time_name
+        self.resource_name = resource_name
 
         if label_strategy not in {"collective", "separate"}:
             raise ValueError("label_strategy must be 'collective' or 'separate'")
@@ -92,12 +109,11 @@ class DeviationLabeling:
 
     def _load_log_csv(self):
         df = pd.read_csv(self.path_event_log)
-        if self.log_name == "Helpdesk":
-            rename = {"CaseID": "case:concept:name",
-                      "Activity": "concept:name",
-                      "CompleteTimestamp": "time:timestamp",
-                      "Resource": "org:resource"}
-            df = df.rename(columns=rename)
+        rename = {self.case_name: "case:concept:name",
+                  self.activity_name: "concept:name",
+                  self.time_name: "time:timestamp",
+                  self.resource_name: "org:resource"}
+        df = df.rename(columns=rename)
 
         df["time:timestamp"] = pd.to_datetime(df["time:timestamp"], errors="coerce")
 
@@ -130,11 +146,11 @@ class DeviationLabeling:
                     log_idx += 1
                     continue
 
-                if a != ">>" and b == ">>":  # log move consumes log
+                if a != ">>" and b == ">>":
                     dt = str((a, b))
                     dev_pos_by_case[cid].append((log_idx, dt))
                     dev_types.add(dt)
-                    # log_idx must increment on synchronous moves AND on log-moves (a, >>)
+                    # log_idx must increment
                     log_idx += 1
                     continue
 
@@ -146,11 +162,10 @@ class DeviationLabeling:
 
         return sorted(dev_types), dict(dev_pos_by_case)
 
-    def generate_individual_labels(
-        self,
-        trace_attr: List[str],
-        max_prefix_cap: int = None,
-        conf_runs: int = 100) -> Tuple[Any, Any]:
+    def generate_individual_labels(self,
+                                   trace_attr: List[str],
+                                   max_prefix_cap: int = None,
+                                   conf_runs: int = 100) -> Tuple[Any, Any]:
         
         if self.label_strategy not in {"collective", "separate"}:
             raise ValueError("label_strategy must be 'collective' or 'separate'")
@@ -162,6 +177,7 @@ class DeviationLabeling:
         for _ in trange(conf_runs):
             conformance = pm4py.conformance.conformance_diagnostics_alignments(ev_log, net, im, fm, multi_processing=False)
             deviations, dev_pos_by_case = self._extract_deviations_from_alignment(ev_log, conformance)
+            
             if len(best_D[0]) == 0 or len(best_D[0]) >= len(deviations):
                 best_D = (deviations, dev_pos_by_case)
 
@@ -173,20 +189,24 @@ class DeviationLabeling:
         case_start_ts = df_sorted.groupby("case:concept:name")["time:timestamp"].transform("first")
         case_end_ts   = df_sorted.groupby("case:concept:name")["time:timestamp"].transform("last")
 
-        df_sorted["weekday_start"] = case_start_ts.dt.isocalendar().day.astype("Int64").astype("string").fillna("NA")
-        df_sorted["weekday_end"]   = case_end_ts.dt.isocalendar().day.astype("Int64").astype("string").fillna("NA")
+        # old: ISO weekday number (Mon=1..Sun=7) -> commented out
+        # df_sorted["weekday_start"] = case_start_ts.dt.isocalendar().day.astype("Int64").astype("string").fillna("NA")
+        # df_sorted["weekday_end"]   = case_end_ts.dt.isocalendar().day.astype("Int64").astype("string").fillna("NA")
+
+        # new: weekday names (Mon..Sun) using the same semantics as datetime.weekday() (Mon=0..Sun=6)
+        weekDaysMapping = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+        _day_map = {i: weekDaysMapping[i] for i in range(7)}
+
+        df_sorted["weekday_start"] = case_start_ts.dt.weekday.map(_day_map).fillna("NA").astype("string")
+        df_sorted["weekday_end"]   = case_end_ts.dt.weekday.map(_day_map).fillna("NA").astype("string")
+
+        # df_sorted["weekday_start"] = case_start_ts.dt.isocalendar().day.astype("Int64").astype("string").fillna("NA")
+        # df_sorted["weekday_end"]   = case_end_ts.dt.isocalendar().day.astype("Int64").astype("string").fillna("NA")
 
         activities = df_sorted["concept:name"].fillna("NA").astype(str).unique().tolist()
         act2idx = {act: (i + 1) for i, act in enumerate(sorted(activities))}  # 0 reserved for PAD
 
-        if "org:resource" in df_sorted.columns:
-            resource_source_col = "org:resource"
-        elif "org:group" in df_sorted.columns:
-            resource_source_col = "org:group"
-        else:
-            resource_source_col = "org:resource"
-            df_sorted[resource_source_col] = "NA"
-
+        resource_source_col = "org:resource"
         resources = df_sorted[resource_source_col].fillna("NA").astype(str).unique().tolist()
         res2idx = {res: (i + 1) for i, res in enumerate(sorted(resources))}
 
@@ -196,7 +216,7 @@ class DeviationLabeling:
 
         case_attr_list = list(dict.fromkeys((trace_attr or []) + ["weekday_start", "weekday_end"]))
 
-        # initialize LabelEncoders per trace attr (unchanged)
+        # initialize LabelEncoders per trace attr
         case_attr_encoders: Dict[str, LabelEncoder] = {}
         for ca in case_attr_list:
             le = LabelEncoder()
@@ -260,8 +280,7 @@ class DeviationLabeling:
                 prefix_len = i + 1
 
                 # keep case_id for splitting; keep prefix_id as (case, pref_len)
-                base = {# used for splitting (no leakage)
-                        "case_id": str(cid),                    
+                base = {"case_id": str(cid), # used for splitting (no leakage)                   
                         "prefix_len": int(prefix_len),
                         "prefix_id": str((str(cid), prefix_len)),  
                         "activities": act_row,
@@ -278,7 +297,7 @@ class DeviationLabeling:
 
         df_flat = pd.DataFrame(rows)
 
-        # remove scaling from here. We will scale after split with TraceAttrScaler if needed.
+        # remove scaling from here: scale after split with TraceAttrScaler if needed.
         # Store cardinalities for one-hot pipeline (incl. UNK bucket if used)
         trace_attr_cardinalities = {ca: (len(le.classes_) + 1)  # +1 for the UNK id you create via enc=len(classes_)
                                     for ca, le in case_attr_encoders.items()}
@@ -317,6 +336,7 @@ class TrainTestSplit:
         
         if label_strategy not in {"collective", "separate"}:
             raise ValueError("label_strategy must be 'collective' or 'separate'")
+        
         self.df_labeled_deviations = df_labled_deviations
         self.label_strategy = label_strategy
         self.seed = seed
@@ -359,9 +379,11 @@ class TrainTestSplit:
         train_df = df[train_mask].reset_index(drop=True)
         val_df = df[val_mask].reset_index(drop=True) if len(val_cases) > 0 else df.iloc[0:0].copy()
         test_df = df[test_mask].reset_index(drop=True)
+        
         return train_df, val_df, test_df
 
-    def data_split(self, train_frac: float = 2/3,
+    def data_split(self, 
+                   train_frac: float = 2/3,
                    val_frac: float = 0.0):
         
         data = self.df_labeled_deviations
@@ -392,6 +414,14 @@ class TrainTestSplit:
 
 
 class Undersampling:
+    """
+    Training data consists of many prefixes (many rows):
+    The paper by Grohs says it undersamples traces (cases), meaning:
+    - If a case is removed, all its prefixes are removed.
+    - If a case is kept, all its prefixes are kept.
+    
+    Therefore, we take one representative row per case, usually the earliest prefix: OSS expects one instance per item being sampled
+    """
     def __init__(self,
                  train_data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
                  list_dynamic_cols: List[str],
@@ -517,7 +547,7 @@ class Undersampling:
             return self._collective_oss(self.train_data)
         return self._separate_oss(self.train_data)
 
-
+# used for LSTMs
 class PrefixDataset(Dataset):
     def __init__(self,
                  df_train: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
@@ -638,9 +668,8 @@ class PrefixDataset(Dataset):
     def tensor_datset_encoding(self, device=None):
         """
         Embedding pipeline output.
-        Supports:
-          - collective: (train, val, test) TensorDataset
-          - separate: dict[label]->TensorDataset
+        - collective: (train, val, test) TensorDataset
+        - separate: dict[label]-> TensorDataset
         """
         if self.label_strategy == "collective":
             train_dataset = self._to_tensor_dataset(self.df_train, self.y_cols, device)
@@ -707,34 +736,33 @@ class PrefixDataset(Dataset):
             raise KeyError(f"Trace attributes not found in dataframe columns: {missing}")
         return resolved
 
+
 # new for FFN
 class PrefixDatasetTabularFFN:
     """
     Builds (X, y) for FFNN using one-hot over:
-      - activities/resources/months per position (flattened)
-      - trace_attr_* (one-hot by cardinality; optional numeric cols appended)
+    - activities/resources/months per position (flattened)
+    - trace_attr_* (one-hot by cardinality; optional numeric cols appended)
 
-    Works with:
-      - collective: DataFrame + y_cols list
-      - separate: dict[label]->DataFrame + y_cols dict[label]->[col]
+    - collective: DataFrame + y_cols list
+    - separate: dict[label]->DataFrame + y_cols dict[label]->[col]
     """
-    def __init__(
-        self,
-        df_train: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
-        df_val: Union[None, pd.DataFrame, Dict[str, pd.DataFrame]],
-        df_test: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
-        y_cols: Union[List[str], Dict[str, List[str]]],
-        label_strategy: str,
-        # vocab sizes (WITHOUT PAD, since PAD=0 is reserved)
-        activity_vocab_size: int,
-        resource_vocab_size: int,
-        month_vocab_size: int,
-        # trace attrs
-        trace_attr_categorical_cols: Optional[List[str]] = None,
-        trace_attr_cardinalities: Optional[Dict[str, int]] = None,  # key: raw attr name (no prefix), value: num_classes
-        trace_attr_numeric_cols: Optional[List[str]] = None,
-        drop_pad: bool = True,
-    ):
+    def __init__(self,
+                 df_train: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+                 df_val: Union[None, pd.DataFrame, Dict[str, pd.DataFrame]],
+                 df_test: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+                 y_cols: Union[List[str], Dict[str, List[str]]],
+                 label_strategy: str,
+                 # vocab sizes (WITHOUT PAD, since PAD=0 is reserved)
+                 activity_vocab_size: int,
+                 resource_vocab_size: int,
+                 month_vocab_size: int,
+                 # trace attrs
+                 trace_attr_categorical_cols: Optional[List[str]] = None,
+                 trace_attr_cardinalities: Optional[Dict[str, int]] = None,  # key: raw attr name (no prefix), value: num_classes
+                 trace_attr_numeric_cols: Optional[List[str]] = None,
+                 drop_pad: bool = True):
+        
         if label_strategy not in {"collective", "separate"}:
             raise ValueError("label_strategy must be 'collective' or 'separate'")
         self.label_strategy = label_strategy
@@ -822,9 +850,8 @@ class PrefixDatasetTabularFFN:
     def tensor_dataset_encoding(self, device=None):
         """
         Tabular one-hot pipeline output.
-        Supports:
-          - collective: (train, val, test) TensorDataset
-          - separate: dict[label]->TensorDataset
+        - collective: (train, val, test) TensorDataset
+        - separate: dict[label]->TensorDataset
         """
         if self.label_strategy == "collective":
             return (

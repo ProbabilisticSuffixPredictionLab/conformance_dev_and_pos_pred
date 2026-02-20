@@ -117,7 +117,13 @@ class Training:
     def _weighted_loss(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         # Handling of seperate mode, output predicts for a label two logit values (positions: 0: False, 1: true) for binary class, target only contains the class as integer.
         if self.loss_mode == "separate":
+            
+            #print("shape preds", preds.shape)
+            
             targets = targets.view(-1).long()
+            
+            #print("shape tgts", targets.shape)
+            
             class_weights = torch.tensor([1.0, self.alpha_dc], device=preds.device, dtype=preds.dtype)
             return F.cross_entropy(preds, targets, weight=class_weights)
 
@@ -155,6 +161,7 @@ class Training:
                 self.optimizer.zero_grad()
                 
                 logits = self.model(x_act, x_res, x_month, x_trace)
+                #print("logits", logits.shape)
 
                 # Weighted BCE
                 loss = self._weighted_loss(logits, y)

@@ -183,7 +183,7 @@ class _SingleLabelIDP(nn.Module):
         x = self.leaky_relu(x)
         x = self.dropout(x)
         
-        # B, 2) logits
+        # B, 2 logits
         return self.fc_output(x)
 
 class LSTMSeparateIDP(nn.Module):
@@ -192,27 +192,28 @@ class LSTMSeparateIDP(nn.Module):
                  resource_vocab_size: int,
                  month_vocab_size: int,
                  num_trace_features: int,
-                 num_output_labels: int,
+                 # num_output_labels: int,
                  embedding_dim: int = 16,
                  lstm_hidden: int = 64,
                  fc_hidden: int = 128,
                  dropout: float = 0.1,
                  device: torch.device = torch.device("cuda")):
         super().__init__()
-        if num_output_labels is None or num_output_labels < 1:
-            raise ValueError("num_output_labels must be provided and > 0")
+        # if num_output_labels is None or num_output_labels < 1:
+        #    raise ValueError("num_output_labels must be provided and > 0")
 
         self.device = torch.device(device)
-        self.num_output_labels = num_output_labels
+        # self.num_output_labels = num_output_labels
 
-        self.label_heads = nn.ModuleList([_SingleLabelIDP(activity_vocab_size=activity_vocab_size,
-                                                          resource_vocab_size=resource_vocab_size,
-                                                          month_vocab_size=month_vocab_size,
-                                                          num_trace_features=num_trace_features,
-                                                          embedding_dim=embedding_dim,
-                                                          lstm_hidden=lstm_hidden,
-                                                          fc_hidden=fc_hidden,
-                                                          dropout=dropout) for _ in range(num_output_labels)])
+        # self.label_heads = nn.ModuleList([_SingleLabelIDP(activity_vocab_size=activity_vocab_size,
+        self.head = _SingleLabelIDP(activity_vocab_size=activity_vocab_size,
+                                    resource_vocab_size=resource_vocab_size,
+                                    month_vocab_size=month_vocab_size,
+                                    num_trace_features=num_trace_features,
+                                    embedding_dim=embedding_dim,
+                                    lstm_hidden=lstm_hidden,
+                                    fc_hidden=fc_hidden,
+                                    dropout=dropout)
 
         self.init_kwargs = dict(activity_vocab_size=activity_vocab_size,
                                 resource_vocab_size=resource_vocab_size,
@@ -221,7 +222,7 @@ class LSTMSeparateIDP(nn.Module):
                                 embedding_dim=embedding_dim,
                                 lstm_hidden=lstm_hidden,
                                 fc_hidden=fc_hidden,
-                                num_output_labels=num_output_labels,
+                                # num_output_labels=num_output_labels,
                                 dropout=dropout,
                                 device=self.device.type)
 
@@ -239,12 +240,11 @@ class LSTMSeparateIDP(nn.Module):
         x_month = x_month.to(self.device)
         x_trace = x_trace.to(self.device)
 
-        logits = torch.stack(
-            [head(x_act, x_res, x_month, x_trace) for head in self.label_heads],dim=-1)
+        # logits = torch.stack([head(x_act, x_res, x_month, x_trace) for head in self.label_heads], dim=-1)
+        logits = self.head(x_act, x_res, x_month, x_trace)
        
         if apply_softmax:
-            # softmax over the class dimension (size=2), not over labels
-            logits = torch.softmax(logits, dim=1)
+            logits = torch.softmax(logits, dim=-1) # class dim
             
         return logits
 
