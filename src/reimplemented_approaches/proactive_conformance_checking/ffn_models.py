@@ -13,34 +13,6 @@ import torch.nn as nn
 from pathlib import Path
 from typing import Optional
 
-def _to_2d_float(x: torch.Tensor) -> torch.Tensor:
-    """
-    Ensure tensor is shaped [batch, features] and float.
-    """
-    if x.ndim == 1:
-        x = x.unsqueeze(0)
-    if x.ndim > 2:
-        x = x.view(x.size(0), -1)
-    return x.float()
-
-def _concat_features(x_act: torch.Tensor,
-                     x_res: Optional[torch.Tensor] = None,
-                     x_month: Optional[torch.Tensor] = None,
-                     x_trace: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """
-    Concatenate feature blocks as described in the paper's FFN diagrams.
-    """
-    if x_res is None and x_month is None and x_trace is None:
-        return _to_2d_float(x_act)
-    if x_res is None or x_month is None or x_trace is None:
-        raise ValueError("Provide either x_concat only OR all of x_act/x_res/x_month/x_trace.")
-
-    x_act_f = _to_2d_float(x_act)
-    x_res_f = _to_2d_float(x_res)
-    x_month_f = _to_2d_float(x_month)
-    x_trace_f = _to_2d_float(x_trace)
-    return torch.cat([x_act_f, x_res_f, x_month_f, x_trace_f], dim=-1)
-
 class FFNCollectiveIDP(nn.Module):
     def __init__(self,
                  input_size: int,
@@ -78,25 +50,20 @@ class FFNCollectiveIDP(nn.Module):
         self.to(self.device)
 
     def forward(self,
-                x_act: torch.Tensor,
-                x_res: Optional[torch.Tensor] = None,
-                x_month: Optional[torch.Tensor] = None,
-                x_trace: Optional[torch.Tensor] = None,
+                x: torch.Tensor,
                 apply_sigmoid: bool = False) -> torch.Tensor:
 
-        x_concat = _concat_features(x_act, x_res, x_month, x_trace).to(self.device)
+        h = self.fc_hidden_1(x)
+        h = self.layer_norm_1(h)
+        h = self.leaky_relu_1(h)
 
-        x = self.fc_hidden_1(x_concat)
-        x = self.layer_norm_1(x)
-        x = self.leaky_relu_1(x)
+        h2 = self.fc_hidden_2(h)
+        h2 = self.layer_norm_2(h2)
+        h2 = self.leaky_relu_2(h2)
 
-        x = self.fc_hidden_2(x)
-        x = self.layer_norm_2(x)
-        x = self.leaky_relu_2(x)
+        h2 = self.dropout(h2)
 
-        x = self.dropout(x)
-
-        logits = self.fc_output(x)
+        logits = self.fc_output(h2)
 
         if apply_sigmoid:
             return torch.sigmoid(logits)

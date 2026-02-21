@@ -1,6 +1,6 @@
 import os
 from collections import defaultdict
-from typing import List, Dict, Tuple, Set, Any, Union, Optional
+from typing import List, Dict, Tuple, Set, Any, Union
 import pandas as pd
 import numpy as np
 from tqdm import trange
@@ -736,70 +736,70 @@ class PrefixDataset(Dataset):
             raise KeyError(f"Trace attributes not found in dataframe columns: {missing}")
         return resolved
 
-
 # new for FFN
 class PrefixDatasetTabularFFN:
     """
-    Builds (X, y) for FFNN using one-hot over:
-    - activities/resources/months per position (flattened)
-    - trace_attr_* (one-hot by cardinality; optional numeric cols appended)
+    FFN tabular encoding with SAME init params as PrefixDataset.
 
-    - collective: DataFrame + y_cols list
-    - separate: dict[label]->DataFrame + y_cols dict[label]->[col]
+    X consists of:
+    - one-hot over (activity/resource/month) sequences per position (flattened)
+    - trace attributes taken same logic as PrefixDataset: df[trace_cols]
     """
     def __init__(self,
                  df_train: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
                  df_val: Union[None, pd.DataFrame, Dict[str, pd.DataFrame]],
                  df_test: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+                 activity_col: str,
+                 resource_col: str,
+                 month_col: str,
+                 trace_cols,
                  y_cols: Union[List[str], Dict[str, List[str]]],
-                 label_strategy: str,
-                 # vocab sizes (WITHOUT PAD, since PAD=0 is reserved)
-                 activity_vocab_size: int,
-                 resource_vocab_size: int,
-                 month_vocab_size: int,
-                 # trace attrs
-                 trace_attr_categorical_cols: Optional[List[str]] = None,
-                 trace_attr_cardinalities: Optional[Dict[str, int]] = None,  # key: raw attr name (no prefix), value: num_classes
-                 trace_attr_numeric_cols: Optional[List[str]] = None,
+                 label_strategy: str = "collective",
                  drop_pad: bool = True):
-        
         if label_strategy not in {"collective", "separate"}:
             raise ValueError("label_strategy must be 'collective' or 'separate'")
         self.label_strategy = label_strategy
 
-        self.activity_vocab_size = int(activity_vocab_size)
-        self.resource_vocab_size = int(resource_vocab_size)
-        self.month_vocab_size = int(month_vocab_size)
-        self.drop_pad = bool(drop_pad)
-
-        self.trace_attr_categorical_cols = trace_attr_categorical_cols or []
-        self.trace_attr_cardinalities = trace_attr_cardinalities or {}
-        self.trace_attr_numeric_cols = trace_attr_numeric_cols or []
-
+        # same params/fields as PrefixDataset
+        self.activity_col = activity_col
+        self.resource_col = resource_col
+        self.month_col = month_col
+        self.trace_cols = trace_cols or []
         self.y_cols = y_cols
 
+        # FFN-specific
+        self.drop_pad = bool(drop_pad)
+
+        # store splits (same logic as PrefixDataset)
         if label_strategy == "collective":
             if not isinstance(df_train, pd.DataFrame) or not isinstance(df_test, pd.DataFrame):
-                raise TypeError("Collective strategy expects single DataFrame splits.")
+                raise TypeError("Collective strategy expects single train/val/test DataFrames.")
             if df_val is not None and not isinstance(df_val, pd.DataFrame):
                 raise TypeError("Collective strategy expects df_val as DataFrame (or None).")
             if not isinstance(y_cols, list):
-                raise TypeError("Collective strategy expects y_cols as list.")
+                raise TypeError("Collective strategy expects y_cols as a list of column names.")
+
             self.df_train = df_train.reset_index(drop=True)
             self.df_val = (df_val.reset_index(drop=True) if isinstance(df_val, pd.DataFrame)
                            else self.df_train.iloc[0:0].copy())
             self.df_test = df_test.reset_index(drop=True)
+
             self.df_train_dict = None
             self.df_val_dict = None
             self.df_test_dict = None
         else:
             if not isinstance(df_train, dict) or not isinstance(df_test, dict):
-                raise TypeError("Separate strategy expects dict splits.")
+                raise TypeError("Separate strategy expects dict[label -> DataFrame] inputs.")
             if df_val is not None and not isinstance(df_val, dict):
-                raise TypeError("Separate strategy expects df_val as dict (or None).")
+                raise TypeError("Separate strategy expects df_val as dict[label -> DataFrame] (or None).")
             if not isinstance(y_cols, dict):
-                raise TypeError("Separate strategy expects y_cols as dict[label]->list.")
+                raise TypeError("Separate strategy expects y_cols as dict[label -> List[str]].")
+
             val_dict = df_val or {k: v.iloc[0:0].copy() for k, v in df_train.items()}
+            missing_keys = (set(df_train.keys()) - set(df_test.keys())) | (set(df_train.keys()) - set(val_dict.keys()))
+            if missing_keys:
+                raise ValueError(f"Missing splits for labels: {sorted(missing_keys)}")
+
             self.df_train = None
             self.df_val = None
             self.df_test = None
@@ -807,17 +807,55 @@ class PrefixDatasetTabularFFN:
             self.df_val_dict = {k: val_dict[k].reset_index(drop=True) for k in df_train.keys()}
             self.df_test_dict = {k: df_test[k].reset_index(drop=True) for k in df_train.keys()}
 
+        # infer vocab sizes from available training data (PAD=0)
+        ref_df = self._get_reference_df()
+        self.activity_vocab_size = self._infer_max_id(ref_df, self.activity_col)
+        self.resource_vocab_size = self._infer_max_id(ref_df, self.resource_col)
+        self.month_vocab_size = self._infer_max_id(ref_df, self.month_col)
+
+    def _get_reference_df(self) -> pd.DataFrame:
+        if self.label_strategy == "collective":
+            return self.df_train
+        # pick first non-empty df
+        for _, df in self.df_train_dict.items():
+            if len(df) > 0:
+                return df
+        # fallback: first key even if empty
+        return self.df_train_dict[next(iter(self.df_train_dict.keys()))]
+
+    @staticmethod
+    def _infer_max_id(df: pd.DataFrame, col: str) -> int:
+        if col not in df.columns or len(df) == 0:
+            return 0
+        arr = np.asarray(df[col].tolist(), dtype=np.int64)
+        return int(arr.max()) if arr.size else 0
+
     def _one_hot_seq(self, x: torch.Tensor, num_classes_with_pad: int) -> torch.Tensor:
         oh = F.one_hot(x, num_classes=num_classes_with_pad)  # [N,L,C]
         if self.drop_pad:
             oh = oh[..., 1:]  # drop PAD channel => PAD becomes all zeros
         return oh.float()
 
+    def _resolve_trace_columns(self, df: pd.DataFrame) -> List[str]:
+        resolved = []
+        missing = []
+        for name in (self.trace_cols or []):
+            prefixed = name if name.startswith("trace_attr_") else f"trace_attr_{name}"
+            if prefixed in df.columns:
+                resolved.append(prefixed)
+            elif name in df.columns:
+                resolved.append(name)
+            else:
+                missing.append(name)
+        if missing:
+            raise KeyError(f"Trace attributes not found in dataframe columns: {missing}")
+        return resolved
+
     def _build_X(self, df: pd.DataFrame) -> torch.Tensor:
-        # dynamic
-        act = torch.tensor(np.asarray(df["activities"].tolist(), dtype=np.int64), dtype=torch.long)
-        res = torch.tensor(np.asarray(df["resources"].tolist(), dtype=np.int64), dtype=torch.long)
-        mon = torch.tensor(np.asarray(df["months"].tolist(), dtype=np.int64), dtype=torch.long)
+        # sequences -> one-hot -> flatten
+        act = torch.tensor(np.asarray(df[self.activity_col].tolist(), dtype=np.int64), dtype=torch.long)
+        res = torch.tensor(np.asarray(df[self.resource_col].tolist(), dtype=np.int64), dtype=torch.long)
+        mon = torch.tensor(np.asarray(df[self.month_col].tolist(), dtype=np.int64), dtype=torch.long)
 
         act_oh = self._one_hot_seq(act, self.activity_vocab_size + 1).reshape(len(df), -1)
         res_oh = self._one_hot_seq(res, self.resource_vocab_size + 1).reshape(len(df), -1)
@@ -825,26 +863,27 @@ class PrefixDatasetTabularFFN:
 
         parts = [act_oh, res_oh, mon_oh]
 
-        # trace attrs categorical -> one-hot
-        for col in self.trace_attr_categorical_cols:
-            if col not in df.columns:
-                continue
-            x = torch.tensor(df[col].to_numpy(dtype=np.int64, copy=True), dtype=torch.long)
-            raw = col.replace("trace_attr_", "")
-            C = int(self.trace_attr_cardinalities.get(raw, int(x.max().item()) + 1 if x.numel() else 1))
-            parts.append(F.one_hot(x, num_classes=C).float())
-
-        # numeric cols -> float
-        if self.trace_attr_numeric_cols:
-            num = torch.tensor(df[self.trace_attr_numeric_cols].to_numpy(dtype=np.float32, copy=True), dtype=torch.float32)
-            parts.append(num)
+        # trace attributes AS-IS (PrefixDataset logic): take df[resolved_trace_cols] and append
+        if self.trace_cols:
+            trace_cols = self._resolve_trace_columns(df)
+            trace_arr = df[trace_cols].to_numpy(dtype=np.float32, copy=True)
+            parts.append(torch.tensor(trace_arr, dtype=torch.float32))
+        else:
+            # keep shape consistent; no-op
+            pass
 
         return torch.cat(parts, dim=1)
 
     def _to_tensor_dataset(self, df: pd.DataFrame, y_columns: List[str], device=None) -> TensorDataset:
         device = torch.device(device) if device is not None else torch.device("cpu")
         X = self._build_X(df).to(device)
-        y = torch.tensor(df[y_columns].to_numpy(dtype=np.int64, copy=True), dtype=torch.long, device=device) if y_columns else torch.zeros((len(df), 0), dtype=torch.long, device=device)
+
+        if y_columns:
+            y = torch.tensor(df[y_columns].to_numpy(dtype=np.int64, copy=True),
+                             dtype=torch.long, device=device)
+        else:
+            y = torch.zeros((len(df), 0), dtype=torch.long, device=device)
+
         return TensorDataset(X, y)
 
     def tensor_dataset_encoding(self, device=None):
@@ -868,4 +907,39 @@ class PrefixDatasetTabularFFN:
             train_dict[label] = self._to_tensor_dataset(self.df_train_dict[label], y_columns, device)
             val_dict[label] = self._to_tensor_dataset(self.df_val_dict[label], y_columns, device)
             test_dict[label] = self._to_tensor_dataset(self.df_test_dict[label], y_columns, device)
+
         return train_dict, val_dict, test_dict
+    
+    @staticmethod
+    def save_datasets(train_dataset, test_dataset, val_dataset, save_path: str):
+        os.makedirs(save_path, exist_ok=True)
+        train_path = os.path.join(save_path, "train_set.pkl")
+        val_path = os.path.join(save_path, "val_set.pkl")
+        test_path = os.path.join(save_path, "test_set.pkl")
+        torch.save(train_dataset, train_path)
+        torch.save(val_dataset, val_path)
+        torch.save(test_dataset, test_path)
+        return train_path, val_path, test_path
+
+    @staticmethod
+    def load_datasets(save_path: str, map_location=None):
+        train_path = os.path.join(save_path, "train_set.pkl")
+        val_path = os.path.join(save_path, "val_set.pkl")
+        test_path = os.path.join(save_path, "test_set.pkl")
+
+        if add_safe_globals is not None:
+            add_safe_globals([TensorDataset])
+
+        def _torch_load(path):
+            load_kwargs = {}
+            if map_location is not None:
+                load_kwargs["map_location"] = map_location
+            try:
+                return torch.load(path, weights_only=False, **load_kwargs)
+            except TypeError:
+                return torch.load(path, **load_kwargs)
+
+        train_dataset = _torch_load(train_path)
+        val_dataset = _torch_load(val_path)
+        test_dataset = _torch_load(test_path)
+        return train_dataset, val_dataset, test_dataset

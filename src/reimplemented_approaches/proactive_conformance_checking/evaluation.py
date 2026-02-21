@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
@@ -12,9 +14,14 @@ class PredictionResults:
         if self.mode not in {"collective", "separate"}:
             raise ValueError(f"Unsupported evaluation mode '{self.mode}'.")
 
-    def get_predictions_targets(self, batch_size: int = 256, shuffle: bool = True, device: torch.device = torch.device('cpu')):
+    def get_predictions_targets(self,
+                                model_mode: Optional[str] = 'lstm',
+                                batch_size: int = 256,
+                                shuffle: bool = False,
+                                device: torch.device = torch.device('cpu')):
         if self.mode == "collective":
-            return self._run_single(model=self.model,
+            return self._run_single(model_mode=model_mode,
+                                    model=self.model,
                                     dataset=self.test_set,
                                     batch_size=batch_size,
                                     shuffle=shuffle,
@@ -29,7 +36,8 @@ class PredictionResults:
                 for label, dataset in self.test_set.items():
                     if label not in self.model:
                         raise KeyError(f"No model provided for label '{label}'.")
-                    results[label] = self._run_single(model=self.model[label],
+                    results[label] = self._run_single(model_mode=model_mode,
+                                                      model=self.model[label],
                                                       dataset=dataset,
                                                       batch_size=batch_size,
                                                       shuffle=shuffle,
@@ -37,7 +45,8 @@ class PredictionResults:
                                                       use_softmax=True)
                 return results
             
-            return self._run_single(model=self.model,
+            return self._run_single(model_mode=model_mode,
+                                    model=self.model,
                                     dataset=self.test_set,
                                     batch_size=batch_size,
                                     shuffle=shuffle,
@@ -46,7 +55,7 @@ class PredictionResults:
         
         raise ValueError(f"Unsupported evaluation mode '{self.mode}'.")
 
-    def _run_single(self, model, dataset, batch_size, shuffle, device, use_softmax: bool):
+    def _run_single(self, model_mode, model, dataset, batch_size, shuffle, device, use_softmax: bool):
         test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
         model.eval()
         
@@ -54,13 +63,19 @@ class PredictionResults:
         
         with torch.no_grad():
             for batch in test_loader:
-                x_act, x_res, x_month, x_trace, y = batch
-                x_act = x_act.to(device)
-                x_res = x_res.to(device)
-                x_month = x_month.to(device)
-                x_trace = x_trace.to(device)
-                y = y.to(device)
-                logits = model(x_act, x_res, x_month, x_trace)
+                if model_mode == 'ffn':
+                    x, y = batch
+                    x = x.to(device)
+                    y = y.to(device)
+                    logits = model(x)
+                else:
+                    x_act, x_res, x_month, x_trace, y = batch
+                    x_act = x_act.to(device)
+                    x_res = x_res.to(device)
+                    x_month = x_month.to(device)
+                    x_trace = x_trace.to(device)
+                    y = y.to(device)
+                    logits = model(x_act, x_res, x_month, x_trace)
                 
                 if use_softmax:
                     probs = torch.softmax(logits, dim=1)

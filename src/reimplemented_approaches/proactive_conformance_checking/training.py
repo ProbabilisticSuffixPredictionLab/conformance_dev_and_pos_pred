@@ -137,7 +137,7 @@ class Training:
 
         return F.binary_cross_entropy_with_logits(preds, targets, pos_weight=pw)
 
-    def train(self) -> List[Dict[str, Any]]:
+    def train(self, mode:Optional[str]='lstm') -> List[Dict[str, Any]]:
         self.model.to(self.device)
         history: List[Dict[str, Any]] = []
 
@@ -151,24 +151,38 @@ class Training:
             progress = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.num_epochs}", leave=False)
 
             for batch in progress:
-                x_act, x_res, x_month, x_trace, y = batch
-                x_act = x_act.to(self.device, non_blocking=True)
-                x_res = x_res.to(self.device, non_blocking=True)
-                x_month = x_month.to(self.device, non_blocking=True)
-                x_trace = x_trace.to(self.device, non_blocking=True)
-                y = y.to(self.device, non_blocking=True)
-
-                self.optimizer.zero_grad()
+                # ffn
+                if mode == 'ffn':
+                    x, y = batch
+                    x = x.to(self.device, non_blocking=True)
+                    y = y.to(self.device, non_blocking=True)
+                    
+                    self.optimizer.zero_grad()
+                    
+                    logits = self.model(x)
                 
-                logits = self.model(x_act, x_res, x_month, x_trace)
-                #print("logits", logits.shape)
+                # lstm
+                else:
+                    x_act, x_res, x_month, x_trace, y = batch
+                    x_act = x_act.to(self.device, non_blocking=True)
+                    x_res = x_res.to(self.device, non_blocking=True)
+                    x_month = x_month.to(self.device, non_blocking=True)
+                    x_trace = x_trace.to(self.device, non_blocking=True)
+                    y = y.to(self.device, non_blocking=True)
+
+                    self.optimizer.zero_grad()
+                    
+                    logits = self.model(x_act, x_res, x_month, x_trace)
 
                 # Weighted BCE
                 loss = self._weighted_loss(logits, y)
                 loss.backward()
                 self.optimizer.step()
 
-                running_loss += loss.item() * x_act.size(0)
+                if mode == 'ffn':
+                    running_loss += loss.item() * x.size(0)
+                else:
+                    running_loss += loss.item() * x_act.size(0)
 
             train_loss = running_loss / len(self.train_set)
 
@@ -179,17 +193,34 @@ class Training:
                 total_val_loss = 0.0
                 with torch.no_grad():
                     for batch in val_loader:
-                        x_act, x_res, x_month, x_trace, y = batch
-                        x_act = x_act.to(self.device, non_blocking=True)
-                        x_res = x_res.to(self.device, non_blocking=True)
-                        x_month = x_month.to(self.device, non_blocking=True)
-                        x_trace = x_trace.to(self.device, non_blocking=True)
-                        y = y.to(self.device, non_blocking=True)
+                        # ffn
+                        if mode == 'ffn':
+                            x, y = batch
+                            x = x.to(self.device, non_blocking=True)
+                            y = y.to(self.device, non_blocking=True)
+                            
+                            self.optimizer.zero_grad()
+                            
+                            logits = self.model(x)
+                        # lstm
+                        else:
+                            x_act, x_res, x_month, x_trace, y = batch
+                            x_act = x_act.to(self.device, non_blocking=True)
+                            x_res = x_res.to(self.device, non_blocking=True)
+                            x_month = x_month.to(self.device, non_blocking=True)
+                            x_trace = x_trace.to(self.device, non_blocking=True)
+                            y = y.to(self.device, non_blocking=True)
 
-                        logits = self.model(x_act, x_res, x_month, x_trace)
+                            self.optimizer.zero_grad()
+                            
+                            logits = self.model(x_act, x_res, x_month, x_trace)
+                        
                         loss = self._weighted_loss(logits, y)
                         
-                        total_val_loss += loss.item() * x_act.size(0)
+                        if mode == 'ffn':
+                            total_val_loss += loss.item() * x.size(0)
+                        else:
+                            total_val_loss += loss.item() * x_act.size(0)
                 
                 val_loss = total_val_loss / len(self.val_set)
 
