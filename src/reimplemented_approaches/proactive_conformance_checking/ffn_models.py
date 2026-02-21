@@ -134,47 +134,32 @@ class FFNSeparateIDP(nn.Module):
                  input_size: int,
                  fc_hidden_1: int,
                  fc_hidden_2: int,
-                 fc_out: int,
-                 num_output_labels: int,
                  dropout: float = 0.1,
                  device: torch.device = torch.device("cuda")):
         
         super().__init__()
-        if num_output_labels is None or num_output_labels < 1:
-            raise ValueError("num_output_labels must be provided and > 0")
-
-        if num_output_labels != 2:
-            raise ValueError("FFNSeparateIDP (in this codebase) is used as a binary classifier, num_output_labels must be 2 (class logits).")
 
         self.device = torch.device(device)
 
-        self.num_output_labels = num_output_labels
-
         # Two scalar-logit heads stacked into a 2-class logit vector.
-        self.label_heads = nn.ModuleList([_SingleLabelIDP(input_size=input_size,
-                                                          fc_hidden_1=fc_hidden_1,
-                                                          fc_hidden_2=fc_hidden_2,
-                                                          dropout=dropout) for _ in range(num_output_labels)])
+        self.head = _SingleLabelIDP(input_size=input_size,
+                                    fc_hidden_1=fc_hidden_1,
+                                    fc_hidden_2=fc_hidden_2,
+                                    dropout=dropout)
 
         self.init_kwargs = dict(input_size=input_size,
                                 fc_hidden_1=fc_hidden_1,
                                 fc_hidden_2=fc_hidden_2,
-                                fc_out=fc_out,
-                                num_output_labels=num_output_labels,
                                 dropout=dropout,
                                 device=self.device.type)
 
         self.to(self.device)
 
     def forward(self,
-                x_act: torch.Tensor,
-                x_res: Optional[torch.Tensor] = None,
-                x_month: Optional[torch.Tensor] = None,
-                x_trace: Optional[torch.Tensor] = None,
+                x: torch.Tensor,
                 apply_softmax: bool = False) -> torch.Tensor:
 
-        x_concat = _concat_features(x_act, x_res, x_month, x_trace).to(self.device)
-        logits = torch.stack([head(x_concat) for head in self.label_heads], dim=-1)
+        logits = self.head(x)
 
         if apply_softmax:
             return torch.softmax(logits, dim=1)

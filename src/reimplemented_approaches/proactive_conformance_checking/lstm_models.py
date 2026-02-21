@@ -192,18 +192,14 @@ class LSTMSeparateIDP(nn.Module):
                  resource_vocab_size: int,
                  month_vocab_size: int,
                  num_trace_features: int,
-                 # num_output_labels: int,
                  embedding_dim: int = 16,
                  lstm_hidden: int = 64,
                  fc_hidden: int = 128,
                  dropout: float = 0.1,
                  device: torch.device = torch.device("cuda")):
         super().__init__()
-        # if num_output_labels is None or num_output_labels < 1:
-        #    raise ValueError("num_output_labels must be provided and > 0")
 
         self.device = torch.device(device)
-        # self.num_output_labels = num_output_labels
 
         # self.label_heads = nn.ModuleList([_SingleLabelIDP(activity_vocab_size=activity_vocab_size,
         self.head = _SingleLabelIDP(activity_vocab_size=activity_vocab_size,
@@ -222,7 +218,6 @@ class LSTMSeparateIDP(nn.Module):
                                 embedding_dim=embedding_dim,
                                 lstm_hidden=lstm_hidden,
                                 fc_hidden=fc_hidden,
-                                # num_output_labels=num_output_labels,
                                 dropout=dropout,
                                 device=self.device.type)
 
