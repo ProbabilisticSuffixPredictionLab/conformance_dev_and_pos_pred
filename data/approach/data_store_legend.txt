@@ -89,7 +89,6 @@ Legend for data store:
                   # log and model move if across the samples the move is deviating in more than threshold of the cases
                   "pred_deviations": pred_deviations,
                   # deviation and threshold
-                  "deviations_prob_per_case": all_devs_with_prob
-                  }
+                  "deviations_prob_per_case": all_devs_with_prob}
 
 

@@ -47,7 +47,6 @@ Make sure you have Python and Pipenv installed.
 - Clone the Probabilistic Suffix Prediction repository from https://github.com/ProbabilisticSuffixPredictionLab/Probabilistic_Suffix_Prediction_U-ED-LSTM_pub
 - Follow the setup instructions in that repository to install any additional dependencies required for the model.
 
-5. **Run the Project**: You can now run the project within the virtual environment. 
-
+7. **Run the Project**: You can now run the project within the virtual environment. 
 - To reproduce the results, execute the Juyter notebooks.
 - The Helpdesk folders contia all files created after executiong as examples.
