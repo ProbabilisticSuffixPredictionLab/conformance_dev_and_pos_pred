@@ -48,5 +48,6 @@ Make sure you have Python and Pipenv installed.
 - Follow the setup instructions in that repository to install any additional dependencies required for the model.
 
 7. **Run the Project**: You can now run the project within the virtual environment. 
-- To reproduce the results, execute the Juyter notebooks.
-- The Helpdesk folders contia all files created after executiong as examples.
+- To reproduce the results, execute the Juyter notebooks in `src/notebooks/`.
+- To reproduce the results of the reimplemented approaches FFN and LSTM execute the Juyter notebooks in `src/notebooks/reimplemented_approaches/proactive_conformance_checking`.
+- To reproduce the results of the original code of BPDP execute the Juyter notebooks in `src/notebooks/reimplemented_approaches/original`. 
