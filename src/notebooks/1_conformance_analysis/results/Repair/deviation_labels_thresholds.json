@@ -9,37 +9,16 @@
     {
         "key": [
             ">>",
-            "CREATE_INVOICE"
-        ],
-        "value": 0.18
-    },
-    {
-        "key": [
-            ">>",
-            "QUALITY_CONTROL"
-        ],
-        "value": 0.04
-    },
-    {
-        "key": [
-            ">>",
             "REPAIR"
         ],
-        "value": 0.29
-    },
-    {
-        "key": [
-            ">>",
-            "SHIPPING"
-        ],
-        "value": 0.37
+        "value": 0.36
     },
     {
         "key": [
             "ACKNOWLEDGEMENT",
             ">>"
         ],
-        "value": 0.37
+        "value": 0.43
     },
     {
         "key": [
@@ -53,6 +32,6 @@
             "REPAIR",
             ">>"
         ],
-        "value": 0.37
+        "value": 0.38
     }
 ]
